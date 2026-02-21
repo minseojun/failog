@@ -21,12 +21,12 @@ class RiskResult:
     pattern_score: int
     ai_score: Optional[int]
     repeated_trigger: bool
+    stats: Dict[str, Any]   # ✅ screens_planner.py가 rr.stats를 쓰니까 반드시 제공
 
 
 # -------------------------------------------------
-# 1️⃣ 패턴 기반 위험도 (기존 로직 유지 + 정리)
+# 패턴 기반 위험도
 # -------------------------------------------------
-
 def _fail_rate(df: pd.DataFrame) -> float:
     if df.empty:
         return 0.0
@@ -40,7 +40,7 @@ def _same_text_fail_count(df: pd.DataFrame, text: str) -> int:
     return len(x)
 
 
-def pattern_risk(user_id: str, target_date: date, text: str) -> tuple[int, bool]:
+def pattern_risk(user_id: str, text: str) -> tuple[int, bool, Dict[str, Any]]:
     end = date.today()
     start = end - timedelta(days=27)
     df = get_tasks_range(user_id, start, end)
@@ -49,27 +49,32 @@ def pattern_risk(user_id: str, target_date: date, text: str) -> tuple[int, bool]
     same_fail_cnt = _same_text_fail_count(df, text)
 
     score = 0
-
-    # 최근 실패율
     score += int(overall_fail * 40)
 
-    # 동일 계획 반복 실패
     if same_fail_cnt >= 3:
         score += 30
 
     repeated_trigger = same_fail_cnt >= 3
 
-    return min(score, 70), repeated_trigger
+    stats = {
+        "window_days": 28,
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
+        "overall_fail_rate": round(float(overall_fail), 3),
+        "same_text_fail_count": int(same_fail_cnt),
+        "total_tasks_28d": int(len(df)),
+        "fail_28d": int((df["status"] == "fail").sum()) if not df.empty else 0,
+        "success_28d": int((df["status"] == "success").sum()) if not df.empty else 0,
+        "todo_28d": int((df["status"] == "todo").sum()) if not df.empty else 0,
+    }
+
+    return min(score, 70), repeated_trigger, stats
 
 
 # -------------------------------------------------
-# 2️⃣ AI 기반 실행가능성(Feasibility) 위험도
+# AI 기반 실행가능성(Feasibility) 위험도
 # -------------------------------------------------
-
 def ai_feasibility_risk(plan_text: str, target_date: date) -> tuple[Optional[int], List[str]]:
-    """
-    LLM이 '오늘 실행 가능성'을 평가하여 위험도(0~100) 반환
-    """
     if not consent_value():
         return None, []
 
@@ -112,38 +117,48 @@ def ai_feasibility_risk(plan_text: str, target_date: date) -> tuple[Optional[int
             ],
             temperature=0.2,
         )
-        text = resp.choices[0].message.content.strip()
-        data = json.loads(text)
+        content = (resp.choices[0].message.content or "").strip()
+        data = json.loads(content)
+
         score = int(data.get("risk_score", 50))
         reasons = data.get("reasons", [])
-        return max(0, min(100, score)), reasons
+        if not isinstance(reasons, list):
+            reasons = []
+
+        return max(0, min(100, score)), [str(x) for x in reasons][:4]
     except Exception:
         return None, []
 
 
 # -------------------------------------------------
-# 3️⃣ 최종 위험도 통합
+# 최종 위험도 통합
 # -------------------------------------------------
-
 def risk_score_plan(user_id: str, target_date: date, text: str) -> RiskResult:
-    if not text.strip():
-        return RiskResult(0, ["계획이 비어 있어요."], 0, None, False)
+    if not (text or "").strip():
+        return RiskResult(
+            score=0,
+            reasons=["계획이 비어 있어요."],
+            pattern_score=0,
+            ai_score=None,
+            repeated_trigger=False,
+            stats={},
+        )
 
-    pattern_score, repeated_trigger = pattern_risk(user_id, target_date, text)
+    pattern_score, repeated_trigger, stats = pattern_risk(user_id, text)
     ai_score, ai_reasons = ai_feasibility_risk(text, target_date)
 
-    # AI가 있으면 더 강하게 반영
     if ai_score is not None:
         final_score = max(pattern_score, ai_score)
-        reasons = ai_reasons
+        reasons = ai_reasons or ["AI가 실행 가능성을 평가했지만 이유를 가져오지 못했어요."]
     else:
         final_score = pattern_score
-        reasons = ["최근 실패 패턴 기반 위험도입니다."]
+        reasons = ["최근 실패 패턴 기반 위험도입니다. (AI 평가 없음)"]
 
     return RiskResult(
         score=int(final_score),
         reasons=reasons,
-        pattern_score=pattern_score,
+        pattern_score=int(pattern_score),
         ai_score=ai_score,
-        repeated_trigger=repeated_trigger,
+        repeated_trigger=bool(repeated_trigger),
+        stats=stats,  # ✅ screens_planner.py가 rr.stats를 쓰므로 제공
     )
