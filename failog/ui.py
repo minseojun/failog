@@ -2,7 +2,49 @@
 from __future__ import annotations
 
 from datetime import date
+import base64
+import os
+from functools import lru_cache
+
 import streamlit as st
+
+
+@lru_cache(maxsize=16)
+def _asset_data_uri(rel_path: str) -> str:
+    """
+    Streamlit에서 <img src="...">로 로컬 파일을 직접 참조하면(정적 서빙 X) 배포 환경에서 깨질 수 있음.
+    그래서 파일을 base64 data URI로 임베드해 100% 안정적으로 표시한다.
+    """
+    # 후보 경로들(레포 구조가 조금 달라도 찾게끔)
+    candidates = []
+
+    # 1) 현재 파일 기준 (failog/ui.py)
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(here, rel_path))                          # failog/assets/hamster.gif 같은 경우
+    candidates.append(os.path.join(here, "..", rel_path))                    # failog/../assets/hamster.gif (레포 루트 assets)
+    candidates.append(os.path.join(here, "..", "..", rel_path))              # 더 상위 대비
+
+    # 2) 현재 작업 디렉토리 기준
+    cwd = os.getcwd()
+    candidates.append(os.path.join(cwd, rel_path))
+    candidates.append(os.path.join(cwd, "failog", rel_path))
+
+    path = None
+    for p in candidates:
+        if os.path.exists(p) and os.path.isfile(p):
+            path = p
+            break
+
+    if path is None:
+        # 깨진 아이콘 대신 "왜 안 뜨는지" 알 수 있게 빈 문자열 반환
+        return ""
+
+    with open(path, "rb") as f:
+        b = f.read()
+
+    b64 = base64.b64encode(b).decode("utf-8")
+    # GIF이므로 image/gif
+    return f"data:image/gif;base64,{b64}"
 
 
 def inject_css(today: date | None = None, selected: date | None = None):
@@ -133,7 +175,6 @@ hr {{
 [data-testid="stTabs"] button[aria-selected="true"] {{
   background: #e5e7eb !important;
 }}
-/* 탭 아래 라인도 블랙&화이트로 */
 [data-testid="stTabs"] [data-baseweb="tab-border"] {{
   background: #111111 !important;
 }}
@@ -206,20 +247,16 @@ hr {{
   padding: 14px 14px;
   background: #ffffff;
 
-  /* ✅ 최소 변경: 오른쪽에 gif 붙이기 위해 flex */
   display: flex;
   align-items: center;
   justify-content: space-between;
 
-  /* ✅ 제목이 살짝 잘리는 느낌 해결: 위에서 조금 내리기 */
   margin-top: 6px;
 }}
-
 .hero-left {{
   display: flex;
   flex-direction: column;
 }}
-
 .hero-gif {{
   height: 52px;
   width: auto;
@@ -251,14 +288,18 @@ def section_title(text: str):
 
 
 def render_hero():
+    gif_uri = _asset_data_uri(os.path.join("assets", "hamster.gif"))
+    # gif가 경로 문제로 못 찾아지면 깨진 아이콘 대신 그냥 안 보이게 처리
+    gif_html = f"<img src='{gif_uri}' class='hero-gif' />" if gif_uri else ""
+
     st.markdown(
-        """
+        f"""
 <div class="failog-hero">
   <div class="hero-left">
     <div class="failog-title">FAILOG</div>
     <div class="failog-sub">실패를 성공으로 — 계획과 습관의 실패를 기록하고, 패턴을 이해하고, 다음 주를 설계해요.</div>
   </div>
-  <img src="assets/hamster.gif" class="hero-gif" />
+  {gif_html}
 </div>
 """,
         unsafe_allow_html=True,
