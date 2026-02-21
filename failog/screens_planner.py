@@ -16,7 +16,7 @@ except Exception:
 from failog.date_utils import week_start, month_grid, korean_dow
 
 # DB & tasks/habits
-from failog.db import (
+from failog.habits_tasks import (
     conn,
     add_plan_task,
     list_habits,
