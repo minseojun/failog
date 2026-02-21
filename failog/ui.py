@@ -8,15 +8,16 @@ import streamlit as st
 def inject_css(today: date | None = None, selected: date | None = None):
     """
     Black & White minimal theme.
-    - Pills removed (display:none)
-    - Buttons: white bg + black border (no black fill)
-    - Headers: grey rectangular boxes
-    - Calendar: grid 붙게(우물정), 폭 넓게, 날짜 줄바꿈 방지
-    - Today cell: light gray background (via st-key-cal_YYYY-MM-DD)
-    - Selected cell: bold border (via st-key-cal_YYYY-MM-DD)
-    - Fix white-on-white text issues
+    Fixes:
+    - Form submit buttons (st.form_submit_button) also styled (no more black buttons)
+    - Calendar: "우물정" grid 붙게, 폭 넓게, 줄바꿈 방지
+    - Today cell: light gray background (cal_YYYY-MM-DD key 기반)
+    - Selected cell: bold inset border (cal_YYYY-MM-DD key 기반)
+    - Pills removed (your custom .pill)
+    - Fix white-on-white text
     - Better English font: Inter
     """
+
     today_iso = today.isoformat() if today else ""
     sel_iso = selected.isoformat() if selected else ""
 
@@ -41,57 +42,43 @@ def inject_css(today: date | None = None, selected: date | None = None):
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
 
-/* ---- Base layout ---- */
+/* ---- Layout ---- */
 .block-container {{
-  max-width: 1240px;        /* 달력 폭 넓히기 */
+  max-width: 1240px;              /* 달력 폭 넓히기 */
   padding-top: 1.0rem;
   padding-bottom: 2.2rem;
 }}
-
-/* App background: pure white */
 [data-testid="stAppViewContainer"] {{
   background: #ffffff !important;
 }}
 
-/* Global font + text colors */
+/* ---- Global typography ---- */
 html, body, [class*="css"] {{
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
                Arial, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif !important;
   color: #111111 !important;
 }}
-/* Fix common white-on-white: force text/labels */
-label, p, span, div {{
-  color: #111111;
+
+/* Fix common "white text on white bg" */
+label, p, span, div, small, li {{
+  color: #111111 !important;
 }}
-/* Captions */
-[data-testid="stCaptionContainer"], .small {{
+[data-testid="stCaptionContainer"] {{
   color: rgba(17,17,17,0.70) !important;
   font-size: 0.92rem;
 }}
-
-/* ---- Cards ---- */
-.card {{
-  border: 1px solid #111111;
-  border-radius: 0px;          /* 각지게 */
-  padding: 14px 14px;
-  background: #ffffff;
+::placeholder {{
+  color: rgba(17,17,17,0.45) !important;
 }}
-.task {{
-  border: 1px solid rgba(17,17,17,0.55);
-  border-radius: 0px;
-  padding: 10px 10px;
-  background: #ffffff;
-}}
-.task + .task {{ margin-top: 8px; }}
 
-/* ---- Remove pills completely ---- */
+/* ---- Remove custom pills completely ---- */
 .pill, .pill-strong {{
   display: none !important;
   border: none !important;
   background: transparent !important;
 }}
 
-/* ---- Headers in grey rectangular boxes ---- */
+/* ---- Section title: grey rectangular emphasis ---- */
 .section-title {{
   display: inline-block;
   padding: 6px 10px;
@@ -102,11 +89,10 @@ label, p, span, div {{
   color: #111111;
   margin: 0 0 8px 0;
 }}
-.section-title.tight {{
-  margin-bottom: 6px;
-}}
+.section-title.tight {{ margin-bottom: 6px; }}
 
-/* ---- Buttons: white + black border (no black fill) ---- */
+/* ---- Buttons (ALL kinds) -> white bg + black border ---- */
+/* Normal st.button */
 [data-testid="stButton"] > button {{
   background: #ffffff !important;
   color: #111111 !important;
@@ -116,26 +102,40 @@ label, p, span, div {{
   font-weight: 700 !important;
   padding: 0.55rem 0.75rem !important;
 }}
-[data-testid="stButton"] > button:hover {{
+/* Form submit button (this is why "추가/습관 저장" stayed black) */
+[data-testid="stFormSubmitButton"] > button {{
+  background: #ffffff !important;
+  color: #111111 !important;
+  border: 1px solid #111111 !important;
+  border-radius: 0px !important;
+  box-shadow: none !important;
+  font-weight: 700 !important;
+  padding: 0.55rem 0.75rem !important;
+}}
+/* Hover/active */
+[data-testid="stButton"] > button:hover,
+[data-testid="stFormSubmitButton"] > button:hover {{
   background: #f3f4f6 !important;
 }}
-[data-testid="stButton"] > button:active {{
+[data-testid="stButton"] > button:active,
+[data-testid="stFormSubmitButton"] > button:active {{
   background: #e5e7eb !important;
 }}
-/* Make disabled still readable */
-[data-testid="stButton"] > button:disabled {{
+/* Disabled readability */
+[data-testid="stButton"] > button:disabled,
+[data-testid="stFormSubmitButton"] > button:disabled {{
   opacity: 0.55 !important;
   color: #111111 !important;
   border-color: rgba(17,17,17,0.55) !important;
 }}
 
-/* ---- Inputs: monochrome ---- */
+/* ---- Inputs ---- */
 [data-testid="stTextInput"] input,
 [data-testid="stTextArea"] textarea {{
   border-radius: 0px !important;
   border: 1px solid rgba(17,17,17,0.55) !important;
-  color: #111111 !important;
   background: #ffffff !important;
+  color: #111111 !important;
 }}
 [data-testid="stTextInput"] input:focus,
 [data-testid="stTextArea"] textarea:focus {{
@@ -143,19 +143,21 @@ label, p, span, div {{
   box-shadow: 0 0 0 2px rgba(17,17,17,0.18) !important;
   border-color: #111111 !important;
 }}
-::placeholder {{
-  color: rgba(17,17,17,0.45) !important;
+
+/* ---- Border containers (st.container(border=True)) ----
+   This replaces the old <div class='card'> hack and removes the empty white boxes.
+*/
+[data-testid="stVerticalBlockBorderWrapper"] {{
+  border: 1px solid #111111 !important;
+  border-radius: 0px !important;
+  background: #ffffff !important;
 }}
 
-/* ---- Expanders: remove rounded “pill-ish” look ---- */
+/* ---- Expanders: make them square and monochrome ---- */
 [data-testid="stExpander"] {{
-  border: 1px solid rgba(17,17,17,0.25);
-  border-radius: 0px;
-  background: #ffffff;
-}}
-[data-testid="stExpander"] summary {{
+  border: 1px solid rgba(17,17,17,0.25) !important;
   border-radius: 0px !important;
-  color: #111111 !important;
+  background: #ffffff !important;
 }}
 
 /* ---- HR ---- */
@@ -166,7 +168,7 @@ hr {{
 }}
 
 /* =========================================================
-   Calendar (Month): make “우물정” grid, no gaps, no wrapping
+   Calendar (Month): 우물정 grid, no gaps, no wrapping
    ========================================================= */
 .cal-weekdays {{
   display: grid;
@@ -192,7 +194,7 @@ hr {{
   border-top: none;
 }}
 
-/* rows: remove Streamlit column gap inside calendar */
+/* Remove gaps inside calendar rows */
 .cal-grid [data-testid="stHorizontalBlock"] {{
   gap: 0px !important;
 }}
@@ -201,7 +203,7 @@ hr {{
   padding-right: 0px !important;
 }}
 
-/* Calendar day buttons */
+/* Calendar day buttons: numeric only, no wrapping */
 .cal-grid [data-testid="stButton"] > button {{
   width: 100% !important;
   min-height: 38px !important;
@@ -209,26 +211,19 @@ hr {{
   margin: 0px !important;
 
   border-radius: 0px !important;
-  border: none !important;                /* grid border is on wrapper via container borders */
+  border: none !important;
   background: #ffffff !important;
 
-  font-size: 0.92rem !important;          /* 줄바꿈 방지 */
+  font-size: 0.92rem !important;
   line-height: 1 !important;
   white-space: nowrap !important;
   font-weight: 700 !important;
+
+  /* internal grid lines */
+  box-shadow: inset -1px -1px 0 0 #111111;
 }}
 
-/* Put borders to create “우물정” look:
-   We simulate grid lines by adding borders on the button itself.
-*/
-.cal-grid [data-testid="stButton"] > button {{
-  box-shadow: inset -1px -1px 0 0 #111111;  /* right/bottom lines */
-}}
-/* Left/top edges handled by container border, so we only draw internal lines. */
-
-/* =========================================================
-   Hero
-   ========================================================= */
+/* ---- Hero ---- */
 .failog-hero {{
   border: 1px solid #111111;
   border-radius: 0px;
@@ -245,7 +240,7 @@ hr {{
 }}
 .failog-sub {{
   margin-top: 6px;
-  color: rgba(17,17,17,0.70);
+  color: rgba(17,17,17,0.70) !important;
   font-size: 1.02rem;
 }}
 
