@@ -32,6 +32,13 @@ from failog.prefs import ck_get, ck_set
 from failog.reminder import parse_hhmm, should_remind
 from failog.weather import weather_card
 
+from failog.risk import risk_score_plan
+from failog.strategy import suggest_strategies_for_plan
+
+from failog.consent import consent_value
+from failog.openai_prefs import effective_openai_key, effective_openai_model
+from failog.coaching import llm_plan_alternatives
+
 
 def screen_planner(user_id: str):
     if "selected_date" not in st.session_state:
