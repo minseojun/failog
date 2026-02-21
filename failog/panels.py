@@ -1,17 +1,17 @@
 # failog/panels.py
-import streamlit as st
+from __future__ import annotations
 
-from failog.cookies import ck_del, ck_set
-from failog.openai_helpers import prefs_openai_key, prefs_openai_model, set_prefs_openai
-from failog.consent import consent_value, set_consent
+import streamlit as st
+from failog.prefs import ck_get, ck_set, ck_del
+from failog.consent import consent_value, set_consent, CONSENT_COOKIE_KEY
 
 
 def render_openai_bottom_panel():
-    st.markdown("<hr/>", unsafe_allow_html=True)
-    st.markdown("### 🔑 OpenAI 설정")
+    # 기존 로직 유지
+    st.markdown("<div class='section-title'>OpenAI 설정</div>", unsafe_allow_html=True)
 
-    default_key = prefs_openai_key()
-    default_model = prefs_openai_model()
+    default_key = ck_get("failog_openai_key", "").strip()
+    default_model = ck_get("failog_openai_model", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
     col1, col2, col3 = st.columns([3.0, 1.6, 1.4])
     with col1:
@@ -44,7 +44,8 @@ def render_openai_bottom_panel():
             st.session_state["openai_model"] = (model or "gpt-4o-mini").strip()
 
             if save:
-                set_prefs_openai(api_key or "", model or "gpt-4o-mini")
+                ck_set("failog_openai_key", (api_key or "").strip())
+                ck_set("failog_openai_model", (model or "gpt-4o-mini").strip())
             else:
                 ck_del("failog_openai_key")
                 ck_set("failog_openai_model", (model or "gpt-4o-mini").strip())
@@ -61,35 +62,32 @@ def render_openai_bottom_panel():
 
 
 def render_privacy_ai_consent_panel():
-    st.markdown("<hr/>", unsafe_allow_html=True)
-    st.markdown("### 🔒 데이터/AI 안내 및 동의")
+    st.markdown("<div class='section-title'>데이터/AI 안내 및 동의</div>", unsafe_allow_html=True)
 
     current = consent_value()
 
-    with st.container():
-        st.caption(
-            "실패 이유·생활 패턴은 개인에게 민감한 데이터일 수 있어요. "
-            "FAILOG는 아래 원칙으로 데이터를 다룹니다."
-        )
+    st.caption(
+        "실패 이유·생활 패턴은 개인에게 민감한 데이터일 수 있어요. FAILOG는 아래 원칙으로 데이터를 다룹니다."
+    )
 
-        with st.expander("자세히 보기", expanded=False):
-            st.markdown(
-                """
+    with st.expander("자세히 보기", expanded=False):
+        st.markdown(
+            """
 - **저장**: 계획/습관/체크/실패원인은 서버의 **SQLite(planner.db)**에 저장됩니다.  
-- **식별자**: user_id는 로그인 대신 **URL의 uid 파라미터**로 구분됩니다. (링크를 공유하면 동일 데이터가 보일 수 있어요)  
+- **식별자**: user_id는 로그인 대신 **URL의 uid 파라미터**로 구분됩니다. (링크 공유 시 동일 데이터가 보일 수 있어요)  
 - **쿠키**: OpenAI 키/모델, 알림/날씨 등 일부 설정은 **쿠키**에 저장될 수 있습니다. (브라우저 정책에 따라 제한 가능)  
 - **AI(OpenAI) 사용**:  
   - *버튼을 눌러 요청한 경우에만* 실패 원인을 분석/카테고리화/코칭을 위해 OpenAI API가 호출됩니다.  
   - 호출 시, 분석에 필요한 범위의 텍스트(실패 원인/요약된 패턴 등)가 전송될 수 있습니다.  
   - 동의하지 않으면 AI 기능은 작동하지 않습니다.
-                """.strip()
-            )
-
-        checked = st.checkbox(
-            "위 내용을 이해했으며, OpenAI 기반 분석/코칭 기능 사용에 동의합니다.",
-            value=current,
-            key="ai_consent_checkbox",
+            """.strip()
         )
-        if checked != current:
-            set_consent(bool(checked))
-            st.success("동의 설정이 저장됐어요.")
+
+    checked = st.checkbox(
+        "위 내용을 이해했으며, OpenAI 기반 분석/코칭 기능 사용에 동의합니다.",
+        value=current,
+        key="ai_consent_checkbox",
+    )
+    if checked != current:
+        set_consent(bool(checked))
+        st.success("동의 설정이 저장됐어요.")
