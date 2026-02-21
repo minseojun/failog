@@ -363,3 +363,54 @@ def ensure_habit_task_for_date(
     c.close()
 
     return int(row2[0]) if row2 else None
+
+
+# failog/habits_tasks.py 에 반드시 포함되어야 하는 함수들
+
+from __future__ import annotations
+
+from datetime import date
+import pandas as pd
+
+from failog.db import conn
+
+
+def get_tasks_range(user_id: str, start_d: date, end_d: date) -> pd.DataFrame:
+    """
+    단일파일 버전과 동일:
+    tasks 테이블에서 user_id 기준으로 start_d~end_d(포함) 범위를 조회
+    """
+    c = conn()
+    df = pd.read_sql_query(
+        """
+        SELECT id, task_date, text, source, habit_id, status, fail_reason
+        FROM tasks
+        WHERE user_id=? AND task_date BETWEEN ? AND ?
+        ORDER BY task_date ASC, id DESC
+        """,
+        c,
+        params=(user_id, start_d.isoformat(), end_d.isoformat()),
+    )
+    c.close()
+    return df
+
+
+def get_all_failures(user_id: str, limit: int = 350) -> pd.DataFrame:
+    """
+    단일파일 버전과 동일:
+    status='fail'만 최근 날짜순으로 limit개 조회
+    """
+    c = conn()
+    df = pd.read_sql_query(
+        """
+        SELECT task_date, text, source, habit_id, fail_reason
+        FROM tasks
+        WHERE user_id=? AND status='fail'
+        ORDER BY task_date DESC
+        LIMIT ?
+        """,
+        c,
+        params=(user_id, int(limit)),
+    )
+    c.close()
+    return df
