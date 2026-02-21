@@ -234,3 +234,50 @@ def llm_chat(api_key: str, model: str, system_context: str, msgs: List[Dict[str,
         temperature=0.7,
     )
     return (resp.choices[0].message.content or "").strip()
+
+
+def llm_plan_alternatives(api_key: str, model: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    작성 시점 plan 대안 제시용
+    context 예:
+      {
+        "plan_text": "...",
+        "risk_score": 78,
+        "risk_reasons": [...],
+        "recent_stats": {...}
+      }
+    """
+    client = openai_client(api_key)
+    prompt = f"""
+너는 사용자의 계획이 실패할 위험이 높을 때, 성공 확률을 높이는 대안을 제시하는 코치야.
+반드시 JSON만 출력해.
+
+입력 컨텍스트:
+{json.dumps(context, ensure_ascii=False, indent=2)}
+
+출력 형식:
+{{
+  "rewrite": "원문을 더 작고 구체적으로 바꾼 1개 문장",
+  "alternatives": ["대안1","대안2","대안3"],
+  "if_then": ["만약 (실패조건) 이면 (대응행동)","만약 ..."]
+}}
+규칙:
+- rewrite는 원문과 의미가 이어져야 함(목표 유지)
+- alternatives는 실행 가능하고 아주 작게
+- if_then은 원인/패턴에 맞게 구체적으로
+""".strip()
+
+    resp = client.chat.completions.create(
+        model=(model or "gpt-4o-mini"),
+        messages=[
+            {"role": "system", "content": "Return valid JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.5,
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        return json.loads(m.group(0)) if m else {"rewrite": "", "alternatives": [], "if_then": []}
