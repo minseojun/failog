@@ -1,247 +1,255 @@
 # failog/ui.py
+from __future__ import annotations
+
+from datetime import date
 import streamlit as st
 
-ACCENT_BLUE = "#111111"
-TEXT_DARK = "#111111"
 
+def inject_css(today: date | None = None, selected: date | None = None):
+    """
+    Black & White minimal theme.
+    - Pills removed (display:none)
+    - Buttons: white bg + black border (no black fill)
+    - Headers: grey rectangular boxes
+    - Calendar: grid 붙게(우물정), 폭 넓게, 날짜 줄바꿈 방지
+    - Today cell: light gray background (via st-key-cal_YYYY-MM-DD)
+    - Selected cell: bold border (via st-key-cal_YYYY-MM-DD)
+    - Fix white-on-white text issues
+    - Better English font: Inter
+    """
+    today_iso = today.isoformat() if today else ""
+    sel_iso = selected.isoformat() if selected else ""
 
-def inject_css():
-    st.markdown(
-        """
-<style>
-/* =========================================================
-   FAILOG Skin — Black & White (No gradients)
-   - Keep layout same
-   - Change only visuals
-   ========================================================= */
-:root{
-  --bg: #ffffff;
-  --surface: #ffffff;
-  --surface2: #f3f4f6;     /* light gray blocks */
-  --surface3: #e5e7eb;     /* darker gray lines */
-  --text: #111111;
-  --muted: #555555;
-  --border: #111111;
-
-  --r0: 0px;
-  --r1: 4px;
-  --r2: 6px;
-
-  --pad: 12px;
-}
-
-/* App background: flat white */
-[data-testid="stAppViewContainer"]{
-  background: var(--bg) !important;
-  color: var(--text) !important;
-}
-.block-container{
-  max-width: 1120px;
-  padding-top: 1.0rem;
-  padding-bottom: 2.0rem;
-}
-
-/* Remove Streamlit header transparency noise */
-[data-testid="stHeader"]{ background: var(--bg) !important; }
-
-/* Typography */
-html, body, [class*="css"]{
-  color: var(--text) !important;
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
-               "Noto Sans KR", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-}
-.small{
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
-/* Kill all pills/badges (요구사항 #3) */
-.pill, .pill-strong{
-  display: none !important;
-}
-
-/* =========================================================
-   “Heading in rectangular box” (요구사항 #4)
-   - Applies to Streamlit markdown headers
-   ========================================================= */
-h2, h3{
-  display: inline-block !important;
-  padding: 6px 10px !important;
-  border: 2px solid var(--border) !important;
-  border-radius: var(--r0) !important;
-  background: var(--surface) !important;
-  letter-spacing: -0.01em;
-}
-h2{ font-size: 1.25rem !important; }
-h3{ font-size: 1.05rem !important; }
-
-/* Divider */
-hr{
-  margin: 1.0rem 0;
-  border: none;
-  border-top: 2px solid var(--border);
-}
-
-/* =========================================================
-   Your wrappers
-   ========================================================= */
-.failog-hero{
-  border: 2px solid var(--border);
-  border-radius: var(--r0);
-  padding: 16px 16px;
-  background: var(--surface);
-}
-.failog-title{
-  font-size: 2.4rem;
-  font-weight: 900;
-  letter-spacing: -0.03em;
-  margin: 0;
-  line-height: 1.04;
-}
-.failog-sub{
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 1.0rem;
-}
-
-.card{
-  border: 2px solid var(--border);
-  border-radius: var(--r0);
-  padding: var(--pad);
-  background: var(--surface);
-}
-.task{
-  border: 2px solid var(--border);
-  border-radius: var(--r0);
-  padding: 10px 10px;
-  background: var(--surface2);
-}
-.task + .task{ margin-top: 10px; }
-
-/* =========================================================
-   Streamlit components — square, BW
-   ========================================================= */
-
-/* Buttons: square, BW */
-.stButton>button{
-  border-radius: var(--r0) !important;
-  border: 2px solid var(--border) !important;
-  background: var(--surface) !important;
-  color: var(--text) !important;
-  padding: 0.42rem 0.7rem !important;
-  box-shadow: none !important;
-}
-.stButton>button:hover{
-  background: var(--surface2) !important;
-}
-.stButton>button:active{
-  background: var(--surface3) !important;
-}
-
-/* Inputs */
-[data-testid="stTextInput"] input,
-[data-testid="stTextArea"] textarea,
-[data-testid="stNumberInput"] input{
-  border-radius: var(--r0) !important;
-  border: 2px solid var(--border) !important;
-  background: var(--surface) !important;
-  color: var(--text) !important;
-  box-shadow: none !important;
-}
-[data-testid="stTextInput"] input:focus,
-[data-testid="stTextArea"] textarea:focus,
-[data-testid="stNumberInput"] input:focus{
-  outline: none !important;
-  box-shadow: none !important;
-  background: var(--surface2) !important;
-}
-
-/* Tabs: make them rectangular too */
-[data-testid="stTabs"] [role="tablist"]{
-  gap: 6px;
-}
-[data-testid="stTabs"] button[role="tab"]{
-  border-radius: var(--r0) !important;
-  border: 2px solid var(--border) !important;
-  background: var(--surface) !important;
-  color: var(--text) !important;
-  padding: 8px 12px !important;
-}
-[data-testid="stTabs"] button[role="tab"][aria-selected="true"]{
-  background: var(--surface2) !important;
-}
-
-/* Expander: square box */
-details{
-  border: 2px solid var(--border);
-  border-radius: var(--r0);
-  background: var(--surface);
-  padding: 6px 10px;
-}
-details summary{
-  cursor: pointer;
-}
-
-/* Metrics: square */
-[data-testid="stMetric"]{
-  border: 2px solid var(--border);
-  border-radius: var(--r0);
-  background: var(--surface);
-  padding: 10px 12px;
-}
-[data-testid="stMetricLabel"]{ color: var(--muted) !important; }
-[data-testid="stMetricValue"]{ color: var(--text) !important; }
-
-/* Altair container: square */
-[data-testid="stVegaLiteChart"]{
-  border: 2px solid var(--border);
-  border-radius: var(--r0);
-  background: var(--surface);
-  padding: 10px;
-}
-
-/* =========================================================
-   Calendar grid (요구사항 #2)
-   - Applied to wrapper .cal-grid that we add in planner screen
-   ========================================================= */
-.cal-grid .stButton>button{
-  border-radius: var(--r0) !important;
-  border: 1px solid #111111 !important;
-  background: #ffffff !important;
-  padding: 0.25rem 0 !important;
-  min-height: 34px !important;
-  line-height: 1.0 !important;
-  font-size: 0.86rem !important;
-  font-weight: 700 !important;
-}
-.cal-grid .stButton>button:hover{
-  background: #f3f4f6 !important;
-}
-.cal-grid .stButton>button:active{
+    dynamic = ""
+    if today_iso:
+        dynamic += f"""
+/* Today highlight (calendar button key: cal_YYYY-MM-DD) */
+.st-key-cal_{today_iso} button {{
   background: #e5e7eb !important;
-}
+}}
+"""
+    if sel_iso:
+        dynamic += f"""
+/* Selected highlight */
+.st-key-cal_{sel_iso} button {{
+  box-shadow: inset 0 0 0 2px #111111 !important;
+}}
+"""
 
-/* Calendar weekday header cells */
-.cal-weekdays{
-  display:grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap:6px;
-  font-size:0.80rem;
-  color:#111111;
-  margin-top:8px;
-}
-.cal-weekdays > div{
+    st.markdown(
+        f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+
+/* ---- Base layout ---- */
+.block-container {{
+  max-width: 1240px;        /* 달력 폭 넓히기 */
+  padding-top: 1.0rem;
+  padding-bottom: 2.2rem;
+}}
+
+/* App background: pure white */
+[data-testid="stAppViewContainer"] {{
+  background: #ffffff !important;
+}}
+
+/* Global font + text colors */
+html, body, [class*="css"] {{
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+               Arial, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif !important;
+  color: #111111 !important;
+}}
+/* Fix common white-on-white: force text/labels */
+label, p, span, div {{
+  color: #111111;
+}}
+/* Captions */
+[data-testid="stCaptionContainer"], .small {{
+  color: rgba(17,17,17,0.70) !important;
+  font-size: 0.92rem;
+}}
+
+/* ---- Cards ---- */
+.card {{
   border: 1px solid #111111;
-  background: #f3f4f6;
-  padding: 6px 0;
-  text-align:center;
-  font-weight:800;
-}
+  border-radius: 0px;          /* 각지게 */
+  padding: 14px 14px;
+  background: #ffffff;
+}}
+.task {{
+  border: 1px solid rgba(17,17,17,0.55);
+  border-radius: 0px;
+  padding: 10px 10px;
+  background: #ffffff;
+}}
+.task + .task {{ margin-top: 8px; }}
 
-/* Optional: make column gaps tighter */
-.cal-row{
+/* ---- Remove pills completely ---- */
+.pill, .pill-strong {{
+  display: none !important;
+  border: none !important;
+  background: transparent !important;
+}}
+
+/* ---- Headers in grey rectangular boxes ---- */
+.section-title {{
+  display: inline-block;
+  padding: 6px 10px;
+  background: #f3f4f6;
+  border: 1px solid #111111;
+  border-radius: 0px;
+  font-weight: 800;
+  color: #111111;
+  margin: 0 0 8px 0;
+}}
+.section-title.tight {{
+  margin-bottom: 6px;
+}}
+
+/* ---- Buttons: white + black border (no black fill) ---- */
+[data-testid="stButton"] > button {{
+  background: #ffffff !important;
+  color: #111111 !important;
+  border: 1px solid #111111 !important;
+  border-radius: 0px !important;
+  box-shadow: none !important;
+  font-weight: 700 !important;
+  padding: 0.55rem 0.75rem !important;
+}}
+[data-testid="stButton"] > button:hover {{
+  background: #f3f4f6 !important;
+}}
+[data-testid="stButton"] > button:active {{
+  background: #e5e7eb !important;
+}}
+/* Make disabled still readable */
+[data-testid="stButton"] > button:disabled {{
+  opacity: 0.55 !important;
+  color: #111111 !important;
+  border-color: rgba(17,17,17,0.55) !important;
+}}
+
+/* ---- Inputs: monochrome ---- */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {{
+  border-radius: 0px !important;
+  border: 1px solid rgba(17,17,17,0.55) !important;
+  color: #111111 !important;
+  background: #ffffff !important;
+}}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {{
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(17,17,17,0.18) !important;
+  border-color: #111111 !important;
+}}
+::placeholder {{
+  color: rgba(17,17,17,0.45) !important;
+}}
+
+/* ---- Expanders: remove rounded “pill-ish” look ---- */
+[data-testid="stExpander"] {{
+  border: 1px solid rgba(17,17,17,0.25);
+  border-radius: 0px;
+  background: #ffffff;
+}}
+[data-testid="stExpander"] summary {{
+  border-radius: 0px !important;
+  color: #111111 !important;
+}}
+
+/* ---- HR ---- */
+hr {{
+  margin: 1.1rem 0;
+  border: none;
+  border-top: 1px solid rgba(17,17,17,0.18);
+}}
+
+/* =========================================================
+   Calendar (Month): make “우물정” grid, no gaps, no wrapping
+   ========================================================= */
+.cal-weekdays {{
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0px;
+  margin-top: 8px;
+  border: 1px solid #111111;
+  border-bottom: none;
+}}
+.cal-weekdays > div {{
+  text-align: center;
+  font-size: 0.82rem;
+  padding: 6px 0;
+  background: #f3f4f6;
+  border-right: 1px solid #111111;
+}}
+.cal-weekdays > div:last-child {{
+  border-right: none;
+}}
+
+.cal-grid {{
+  border: 1px solid #111111;
+  border-top: none;
+}}
+
+/* rows: remove Streamlit column gap inside calendar */
+.cal-grid [data-testid="stHorizontalBlock"] {{
+  gap: 0px !important;
+}}
+.cal-grid [data-testid="column"] {{
+  padding-left: 0px !important;
+  padding-right: 0px !important;
+}}
+
+/* Calendar day buttons */
+.cal-grid [data-testid="stButton"] > button {{
+  width: 100% !important;
+  min-height: 38px !important;
+  padding: 0px !important;
+  margin: 0px !important;
+
+  border-radius: 0px !important;
+  border: none !important;                /* grid border is on wrapper via container borders */
+  background: #ffffff !important;
+
+  font-size: 0.92rem !important;          /* 줄바꿈 방지 */
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  font-weight: 700 !important;
+}}
+
+/* Put borders to create “우물정” look:
+   We simulate grid lines by adding borders on the button itself.
+*/
+.cal-grid [data-testid="stButton"] > button {{
+  box-shadow: inset -1px -1px 0 0 #111111;  /* right/bottom lines */
+}}
+/* Left/top edges handled by container border, so we only draw internal lines. */
+
+/* =========================================================
+   Hero
+   ========================================================= */
+.failog-hero {{
+  border: 1px solid #111111;
+  border-radius: 0px;
+  padding: 14px 14px;
+  background: #ffffff;
+}}
+.failog-title {{
+  font-size: 2.25rem;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  margin: 0;
+  line-height: 1.08;
+  color: #111111;
+}}
+.failog-sub {{
   margin-top: 6px;
-}
+  color: rgba(17,17,17,0.70);
+  font-size: 1.02rem;
+}}
+
+{dynamic}
 </style>
 """,
         unsafe_allow_html=True,
@@ -249,7 +257,6 @@ details summary{
 
 
 def render_hero():
-    # pill 제거(요구사항 #3) + 블랙&화이트 히어로
     st.markdown(
         """
 <div class="failog-hero">
