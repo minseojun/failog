@@ -2,59 +2,36 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any, Dict, List
+import json
 
 import altair as alt
-import pandas as pd
 import streamlit as st
 
-from failog.ui import inject_css, section_title
-from failog.consent import consent_value
-from failog.openai_prefs import effective_openai_key, effective_openai_model
-
+from failog.date_utils import week_start, korean_dow
+from failog.ui import section_title
 from failog.db import get_tasks_range, get_all_failures
-from failog.pdf_report import ensure_korean_font_downloaded, build_weekly_pdf_bytes, failures_by_dow
+from failog.pdf_report import failures_by_dow, ensure_korean_font_downloaded, build_weekly_pdf_bytes
 from failog.categorization import get_or_build_category_map, weekly_category_trend
 from failog.coaching import (
-    repeated_reason_flags,
-    normalize_reason,
-    compute_user_signals,
+    consent_value,
+    effective_openai_key,
+    effective_openai_model,
     llm_weekly_reason_analysis,
     llm_overall_coaching,
     llm_chat,
+    normalize_reason,
+    repeated_reason_flags,
+    compute_user_signals,
 )
 from failog.prefs import ck_get
-from failog.weather import geocode_city
-from failog.date_utils import week_start, korean_dow
+from failog.weather import geocode_city  # pdf city label용(있으면)
 
 
-def _altair_bw(chart: alt.Chart) -> alt.Chart:
-    # 배경 연회색 + 글씨 진한 회색으로 고정
-    return (
-        chart.configure(background="#f3f4f6")
-        .configure_view(fill="#f3f4f6", stroke=None)
-        .configure_axis(
-            labelColor="#303030",
-            titleColor="#202020",
-            domainColor="#111111",
-            tickColor="#111111",
-            gridColor="#d0d0d0",
-            labelFontSize=12,
-            titleFontSize=12,
-        )
-        .configure_legend(
-            labelColor="#303030",
-            titleColor="#202020",
-            labelFontSize=12,
-            titleFontSize=12,
-        )
-        .configure_title(color="#202020", fontSize=14)
-    )
+# 기존 top_reasons/plot 등은 pdf_report에 있는 걸 사용하고, 여기선 화면 로직만 유지
 
 
 def screen_failures(user_id: str):
-    inject_css(today=date.today(), selected=date.today())
-    section_title("Failure Report")
+    st.markdown("## Failure Report")
 
     if "fail_week_offset" not in st.session_state:
         st.session_state["fail_week_offset"] = 0
@@ -64,23 +41,23 @@ def screen_failures(user_id: str):
     ws = week_start(base)
     we = ws + timedelta(days=6)
 
-    # ---- Week nav (center aligned title) ----
-    nav = st.columns([1, 5, 1])
+    # ✅ (요청1) 상단 주 이동 UI: 가운데 정렬 + 작게
+    st.markdown("<div class='small-nav'>", unsafe_allow_html=True)
+    nav = st.columns([1.1, 5.4, 1.1], gap="large")
     with nav[0]:
         if st.button("〈", use_container_width=True, key="fw_prev"):
             st.session_state["fail_week_offset"] += 1
             st.rerun()
     with nav[1]:
         st.markdown(
-            f"<div style='text-align:center; font-weight:900; padding:7px 12px; "
-            f"background:#f3f4f6; border:1px solid #111111;'>"
-            f"{ws.isoformat()} ~ {we.isoformat()}</div>",
+            f"<div class='date-box'>{ws.isoformat()} ~ {we.isoformat()}</div>",
             unsafe_allow_html=True,
         )
     with nav[2]:
         if st.button("〉", use_container_width=True, key="fw_next", disabled=(offset == 0)):
             st.session_state["fail_week_offset"] = max(0, offset - 1)
             st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
     df = get_tasks_range(user_id, ws, we)
     if df.empty:
@@ -88,19 +65,16 @@ def screen_failures(user_id: str):
         return
 
     df = df.copy()
-    df["task_date"] = pd.to_datetime(df["task_date"]).dt.date
     fails = df[df["status"] == "fail"].copy()
 
     tab1, tab2, tab3 = st.tabs(["대시보드", "주간 분석/코칭", "PDF 리포트"])
 
-    # =========================================================
-    # TAB 1: Dashboard (no 'return' allowed inside)
-    # =========================================================
+    # -------------------------
+    # Dashboard
+    # -------------------------
     with tab1:
-        # (중복 타이틀 제거: 탭 라벨이 이미 존재)
-        st.caption("트렌드/카테고리 맵은 동의/키 설정에 따라 표시됩니다.")
-
-        st.markdown("**이번 주 실패(요일 분포)**")
+        # (요청2) 그래프 제목을 섹션타이틀로
+        section_title("이번 주 실패(요일 분포)")
         dow_df = failures_by_dow(df)
         c_dow = (
             alt.Chart(dow_df)
@@ -112,170 +86,168 @@ def screen_failures(user_id: str):
             )
             .properties(height=180)
         )
-        st.altair_chart(_altair_bw(c_dow), use_container_width=True)
+        st.altair_chart(c_dow, use_container_width=True)
 
         st.markdown("<hr/>", unsafe_allow_html=True)
-        st.markdown("**실패 원인 트렌드(주별, 카테고리)**")
 
-        # Gate only this section (NO return)
+        section_title("실패 원인 트렌드(주별, 카테고리)")
+
+        # Consent gate
         if not consent_value():
-            st.info("AI 기능 사용 동의가 필요해요. (Planner 화면에서 동의 가능)")
-        else:
-            api_key = effective_openai_key()
-            model = effective_openai_model()
-            if not api_key:
-                st.info("OpenAI 키가 설정되면 ‘카테고리 트렌드’가 표시돼요. (Planner 화면에서 설정)")
-            else:
-                colA, colB = st.columns([1.2, 2.8])
-                with colA:
-                    refresh = st.button("카테고리 맵 갱신", use_container_width=True, key="cat_map_refresh")
-                with colB:
-                    st.caption("갱신을 누르면 최근 실패 원인을 다시 묶어 카테고리 맵을 업데이트해요.")
+            st.info("AI 기능 사용 동의가 필요해요. (Planner 화면 하단에서 동의)")
+            return
 
-                try:
-                    with st.spinner("카테고리 맵 확인 중..."):
-                        cat_map, msg = get_or_build_category_map(
-                            user_id, api_key, model, force_refresh=bool(refresh)
-                        )
-                except Exception as e:
-                    st.error(f"카테고리 맵 처리 실패: {type(e).__name__}")
-                    cat_map, msg = None, ""
-
-                if msg:
-                    st.caption(msg)
-
-                if not cat_map:
-                    st.info("카테고리 맵이 아직 없어요. 실패 원인 텍스트가 더 쌓이면 만들 수 있어요.")
-                else:
-                    mapping = cat_map.get("mapping", {}) if isinstance(cat_map, dict) else {}
-                    categories = cat_map.get("categories", []) if isinstance(cat_map, dict) else []
-
-                    if isinstance(categories, list) and categories:
-                        with st.expander("카테고리 정의 보기", expanded=False):
-                            for cdef in categories:
-                                name = str(cdef.get("name", "카테고리"))
-                                definition = str(cdef.get("definition", ""))
-                                examples = cdef.get("examples", []) or []
-                                st.markdown(f"**• {name}**")
-                                if definition:
-                                    st.write(definition)
-                                if examples:
-                                    st.write("- 예시:", ", ".join([str(x) for x in examples[:3]]))
-
-                    trend = weekly_category_trend(user_id, weeks=8, topk=6, mapping=mapping)
-                    if trend.empty:
-                        st.info("최근 기간에 실패 원인 데이터가 부족해서 트렌드를 만들 수 없어요.")
-                    else:
-                        y_axis = alt.Axis(title="실패 횟수", tickMinStep=1)
-                        c_trend = (
-                            alt.Chart(trend)
-                            .mark_line(point=True)
-                            .encode(
-                                x=alt.X("week:N", title="주 시작일(월)", sort=sorted(trend["week"].unique().tolist())),
-                                y=alt.Y("count:Q", title="실패 횟수", axis=y_axis),
-                                color=alt.Color("category:N", title="카테고리"),
-                                tooltip=["week", "category", "count"],
-                            )
-                            .properties(height=260)
-                        )
-                        st.altair_chart(_altair_bw(c_trend), use_container_width=True)
-
-    # =========================================================
-    # TAB 2: Weekly analysis / coaching
-    # =========================================================
-    with tab2:
-        # 중복 타이틀 제거
         api_key = effective_openai_key()
         model = effective_openai_model()
+        if not api_key:
+            st.info("OpenAI 키가 설정되면 트렌드가 표시돼요. (Planner 화면 하단 OpenAI 설정)")
+            return
 
-        st.markdown("**원인 주간 분석**")
+        colA, colB = st.columns([1.2, 2.8])
+        with colA:
+            refresh = st.button("카테고리 맵 갱신", use_container_width=True, key="cat_map_refresh")
+        with colB:
+            st.caption("최근 12주 실패 원인을 다시 묶어(최대 7개) 카테고리 맵을 업데이트해요.")
+
+        try:
+            with st.spinner("카테고리 맵 확인 중..."):
+                cat_map, msg = get_or_build_category_map(user_id, api_key, model, force_refresh=bool(refresh))
+        except Exception as e:
+            st.error(f"카테고리 맵 처리 실패: {type(e).__name__}")
+            return
+
+        st.caption(msg)
+
+        if not cat_map:
+            st.info("카테고리 맵이 아직 없어요. 실패 원인 텍스트가 더 쌓이면 만들 수 있어요.")
+            return
+
+        mapping = cat_map.get("mapping", {}) if isinstance(cat_map, dict) else {}
+        categories = cat_map.get("categories", []) if isinstance(cat_map, dict) else []
+
+        if isinstance(categories, list) and categories:
+            with st.expander("카테고리 정의 보기", expanded=False):
+                for cdef in categories[:7]:
+                    name = str(cdef.get("name", "카테고리"))
+                    definition = str(cdef.get("definition", ""))
+                    examples = cdef.get("examples", []) or []
+                    st.markdown(f"**• {name}**")
+                    if definition:
+                        st.write(definition)
+                    if examples:
+                        st.write("- 예시:", ", ".join([str(x) for x in examples[:3]]))
+
+        trend = weekly_category_trend(user_id, weeks=8, topk=6, mapping=mapping)
+        if trend.empty:
+            st.info("최근 기간에 실패 원인 데이터가 부족해서 트렌드를 만들 수 없어요.")
+            return
+
+        y_axis = alt.Axis(title="실패 횟수", tickMinStep=1)
+        c_trend = (
+            alt.Chart(trend)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("week:N", title="주 시작일(월)", sort=sorted(trend["week"].unique().tolist())),
+                y=alt.Y("count:Q", title="실패 횟수", axis=y_axis),
+                color=alt.Color("category:N", title="카테고리"),
+                tooltip=["week", "category", "count"],
+            )
+            .properties(height=280)
+        )
+        st.altair_chart(c_trend, use_container_width=True)
+        st.caption("X축: 주 시작일(월요일) · Y축: 그 주에 해당 카테고리로 기록된 실패 횟수")
+
+    # -------------------------
+    # Weekly analysis / coaching
+    # -------------------------
+    with tab2:
+        # (요청4) 여기 들어오면 있던 '원인 주간 분석' / '맞춤형 AI 코칭' 상단 텍스트(헤더) 삭제
+        # 대신 버튼/결과만 보여줌
 
         if not consent_value():
-            st.info("AI 기능 사용 동의가 필요해요. (Planner 화면에서 동의 가능)")
-        elif not api_key:
-            st.info("OpenAI 키가 설정되면 분석이 표시돼요. (Planner 화면에서 키 입력)")
-        else:
-            weekly_reasons = [r for r in fails["fail_reason"].fillna("").tolist() if str(r).strip()]
-            if len(weekly_reasons) == 0:
-                st.write("이번 주에는 실패 원인 입력이 아직 없어요.")
-            else:
-                # ✅ 버튼 누르면 즉시 생성/갱신 (추가 버튼 없음)
-                if st.button("원인 주간 분석 생성/갱신", use_container_width=True, key="weekly_analyze"):
-                    try:
-                        st.session_state["weekly_analysis"] = llm_weekly_reason_analysis(api_key, model, weekly_reasons)
-                    except Exception as e:
-                        st.error(f"분석 생성 실패: {type(e).__name__}")
+            st.info("AI 기능 사용 동의가 필요해요. (Planner 화면 하단에서 동의)")
+            return
 
-                analysis = st.session_state.get("weekly_analysis")
-                if analysis and isinstance(analysis, dict):
-                    groups = analysis.get("groups", []) or []
-                    for g in groups[:3]:
-                        with st.container(border=True):
-                            st.markdown(f"**{g.get('cause','원인')}**  ·  ~{g.get('estimated_count',0)}회")
-                            st.write(g.get("description", ""))
-                            for s in (g.get("examples") or [])[:3]:
-                                st.write(f"- {s}")
-                else:
-                    st.caption("위 버튼을 누르면 결과가 표시돼요.")
+        api_key = effective_openai_key()
+        model = effective_openai_model()
+        if not api_key:
+            st.info("OpenAI 키가 설정되면 분석/코칭이 표시돼요. (Planner 화면 하단 OpenAI 설정)")
+            return
+
+        # --- 원인 주간 분석 (버튼 누르면 바로 생성/갱신) ---
+        weekly_reasons = [r for r in fails["fail_reason"].fillna("").tolist() if str(r).strip()]
+        if len(weekly_reasons) == 0:
+            st.write("이번 주에는 실패 원인 입력이 아직 없어요.")
+        else:
+            if st.button("원인 주간 분석 생성/갱신", use_container_width=True, key="weekly_analyze"):
+                try:
+                    st.session_state["weekly_analysis"] = llm_weekly_reason_analysis(api_key, model, weekly_reasons)
+                except Exception as e:
+                    st.error(f"분석 생성 실패: {type(e).__name__}")
+
+            analysis = st.session_state.get("weekly_analysis")
+            if analysis and isinstance(analysis, dict):
+                groups = analysis.get("groups", []) or []
+                for g in groups[:3]:
+                    with st.container(border=True):
+                        st.markdown(f"**{g.get('cause','원인')}**  ·  ~{g.get('estimated_count',0)}회")
+                        st.write(g.get("description", ""))
+                        for s in (g.get("examples") or [])[:3]:
+                            st.write(f"- {s}")
 
         st.markdown("<hr/>", unsafe_allow_html=True)
-        st.markdown("**맞춤형 AI 코칭**")
 
-        if not consent_value():
-            st.info("AI 기능 사용 동의가 필요해요. (Planner 화면에서 동의 가능)")
-        elif not api_key:
-            st.info("OpenAI 키가 설정되면 코칭/챗봇이 표시돼요. (Planner 화면에서 키 입력)")
+        # --- 맞춤형 AI 코칭 (버튼 누르면 바로 생성/갱신) ---
+        all_fail = get_all_failures(user_id, limit=350)
+        if all_fail.empty:
+            st.write("아직 실패 데이터가 없어요.")
+            return
+
+        flags = repeated_reason_flags(all_fail)
+        items = []
+        for _, r in all_fail.head(90).iterrows():
+            reason = str(r["fail_reason"] or "")
+            rnorm = normalize_reason(reason)
+            items.append(
+                {
+                    "date": str(r["task_date"]),
+                    "task": str(r["text"]),
+                    "type": str(r["source"]),
+                    "reason": reason,
+                    "repeated_2w": bool(flags.get(rnorm, False)),
+                }
+            )
+        signals = compute_user_signals(user_id, days=28)
+
+        if st.button("맞춤형 AI 코칭 생성/갱신", use_container_width=True, key="overall_coach_btn"):
+            try:
+                st.session_state["overall_coach"] = llm_overall_coaching(api_key, model, items, signals)
+            except Exception as e:
+                st.error(f"코칭 생성 실패: {type(e).__name__}")
+
+        coach = st.session_state.get("overall_coach")
+        if coach and isinstance(coach, dict):
+            top = coach.get("top_causes", []) or []
+            if not top:
+                st.caption("코칭 결과가 비어 있어요. 다시 생성해보세요.")
+            for i, c in enumerate(top[:3], start=1):
+                with st.container(border=True):
+                    st.markdown(f"**{i}) {c.get('cause','원인')}**")
+                    st.write(c.get("summary", ""))
+                    st.markdown("**실행 조언**")
+                    for tip in (c.get("actionable_advice") or [])[:3]:
+                        st.write(f"- {tip}")
+                    creative = c.get("creative_advice_when_repeated_2w") or []
+                    if creative:
+                        st.markdown("**2주+ 반복이면: 창의적 대안**")
+                        for tip in creative[:3]:
+                            st.write(f"- {tip}")
         else:
-            all_fail = get_all_failures(user_id, limit=350)
-            if all_fail.empty:
-                st.write("아직 실패 데이터가 없어요.")
-            else:
-                flags = repeated_reason_flags(all_fail)
-                items: List[Dict[str, Any]] = []
-                for _, r in all_fail.head(90).iterrows():
-                    reason = str(r["fail_reason"] or "")
-                    rnorm = normalize_reason(reason)
-                    items.append(
-                        {
-                            "date": str(r["task_date"]),
-                            "task": str(r["text"]),
-                            "type": str(r["source"]),
-                            "reason": reason,
-                            "repeated_2w": bool(flags.get(rnorm, False)),
-                        }
-                    )
-                signals = compute_user_signals(user_id, days=28)
-
-                # ✅ 버튼 누르면 즉시 생성/갱신 (아래 추가 버튼 없음)
-                if st.button("맞춤형 AI 코칭 생성/갱신", use_container_width=True, key="overall_coach_btn"):
-                    try:
-                        st.session_state["overall_coach"] = llm_overall_coaching(api_key, model, items, signals)
-                    except Exception as e:
-                        st.error(f"코칭 생성 실패: {type(e).__name__}")
-
-                coach = st.session_state.get("overall_coach")
-                if coach and isinstance(coach, dict):
-                    top = coach.get("top_causes", []) or []
-                    if not top:
-                        st.caption("코칭 결과가 비어 있어요. 다시 생성해보세요.")
-                    for i, c in enumerate(top[:3], start=1):
-                        with st.container(border=True):
-                            st.markdown(f"**{i}) {c.get('cause','원인')}**")
-                            st.write(c.get("summary", ""))
-                            st.markdown("**실행 조언**")
-                            for tip in (c.get("actionable_advice") or [])[:3]:
-                                st.write(f"- {tip}")
-                            creative = c.get("creative_advice_when_repeated_2w") or []
-                            if creative:
-                                st.markdown("**2주+ 반복이면: 창의적 대안**")
-                                for tip in creative[:3]:
-                                    st.write(f"- {tip}")
-                else:
-                    st.caption("위 버튼을 누르면 코칭 결과가 표시돼요.")
+            st.caption("버튼을 눌러 코칭을 받아보세요.")
 
         st.markdown("<hr/>", unsafe_allow_html=True)
-        st.markdown("**코칭 챗봇**")
 
+        # --- 코칭 챗봇 ---
         if "chat_messages" not in st.session_state:
             st.session_state["chat_messages"] = []
 
@@ -299,24 +271,6 @@ def screen_failures(user_id: str):
                 else {}
             )
 
-            # 필요 신호
-            signals = compute_user_signals(user_id, days=28)
-            all_fail = get_all_failures(user_id, limit=350)
-            flags = repeated_reason_flags(all_fail) if not all_fail.empty else {}
-            items = []
-            for _, r in all_fail.head(20).iterrows() if not all_fail.empty else []:
-                reason = str(r["fail_reason"] or "")
-                rnorm = normalize_reason(reason)
-                items.append(
-                    {
-                        "date": str(r["task_date"]),
-                        "task": str(r["text"]),
-                        "type": str(r["source"]),
-                        "reason": reason,
-                        "repeated_2w": bool(flags.get(rnorm, False)),
-                    }
-                )
-
             system_context = f"""
 너는 FAILOG의 코칭 챗봇이야.
 원칙:
@@ -326,37 +280,26 @@ def screen_failures(user_id: str):
 - 반복 실패(2주+)가 보이면, 다른 각도의 창의적 대안을 최소 1개 포함
 
 사용자 요약:
-- 최근 14일 실패 이유 상위: {top_reasons_14}
-- 최근 28일 패턴 요약: {signals}
-- 누적 실패 샘플(최근 일부): {items[:8]}
+- 최근 14일 실패 이유 상위: {json.dumps(top_reasons_14, ensure_ascii=False)}
+- 최근 28일 패턴 요약: {json.dumps(signals, ensure_ascii=False)}
+- 누적 실패 샘플(최근 8개): {json.dumps(items[:8], ensure_ascii=False)}
 """.strip()
 
-            if not consent_value():
-                assistant_text = "AI 기능 사용 동의가 필요해요. (Planner 화면에서 동의 가능)"
-            elif not effective_openai_key():
-                assistant_text = "OpenAI 키가 필요해요. (Planner 화면에서 키 설정)"
-            else:
-                try:
-                    assistant_text = llm_chat(
-                        effective_openai_key(),
-                        effective_openai_model(),
-                        system_context,
-                        st.session_state["chat_messages"][-14:],
-                    )
-                except Exception as e:
-                    assistant_text = f"(OpenAI 호출 오류: {type(e).__name__}) 키/모델을 확인해 주세요."
+            try:
+                assistant_text = llm_chat(api_key, model, system_context, st.session_state["chat_messages"][-14:])
+            except Exception as e:
+                assistant_text = f"(OpenAI 호출 오류: {type(e).__name__}) 키/모델을 확인해 주세요."
 
             st.session_state["chat_messages"].append({"role": "assistant", "content": assistant_text})
             with st.chat_message("assistant"):
                 st.write(assistant_text)
 
-    # =========================================================
-    # TAB 3: PDF report (must always render)
-    # =========================================================
+    # -------------------------
+    # PDF report
+    # -------------------------
     with tab3:
-        # ✅ 여기서도 절대 return 하지 않음!
-        st.markdown("**Weekly PDF 리포트 (한글 폰트 포함)**")
-        st.caption("폰트 파일을 레포에 포함하면 한글 깨짐을 확실히 줄일 수 있어요.")
+        # 빈화면 이슈 방지: 항상 타이틀/설명 먼저 출력
+        st.caption("주간 PDF 리포트를 생성하고 다운로드할 수 있어요. (한글 폰트 포함)")
 
         city = ck_get("failog_city", "").strip()
         city_label = ""
@@ -370,7 +313,7 @@ def screen_failures(user_id: str):
 
         font_ready = ensure_korean_font_downloaded()
         if not font_ready:
-            st.warning("폰트 다운로드가 막힌 환경이면 PDF 한글이 깨질 수 있어요. (레포에 폰트 포함 권장)")
+            st.warning("폰트 다운로드가 막힌 환경이면 PDF 한글이 깨질 수 있어요. (레포에 폰트 파일 포함 권장)")
         else:
             st.success("PDF 한글 폰트 준비 완료")
 
