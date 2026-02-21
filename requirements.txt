@@ -1,0 +1,9 @@
+streamlit
+pandas
+requests
+altair
+matplotlib
+reportlab
+openai
+extra-streamlit-components
+streamlit-autorefresh
