@@ -28,11 +28,14 @@ def inject_css(today: date | None = None, selected: date | None = None):
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
 
+/* ---------- Layout ---------- */
+
 .block-container {{
   max-width: 1240px;
-  padding-top: 1.0rem;
+  padding-top: 1.6rem;   /* 🔥 제목 잘림 방지: 위쪽 여백 증가 */
   padding-bottom: 2.2rem;
 }}
+
 [data-testid="stAppViewContainer"] {{
   background: #ffffff !important;
 }}
@@ -43,11 +46,10 @@ html, body, [class*="css"] {{
   color: #111111 !important;
 }}
 
-label, p, span, div, small, li, summary {{
+label, p, span, div, small, li {{
   color: #111111 !important;
 }}
 
-/* 캡션이 너무 연해 보인다고 했으니 조금 더 진하게 */
 [data-testid="stCaptionContainer"] {{
   color: rgba(17,17,17,0.78) !important;
   font-size: 0.92rem;
@@ -57,167 +59,42 @@ label, p, span, div, small, li, summary {{
   color: rgba(17,17,17,0.45) !important;
 }}
 
-.pill, .pill-strong {{
-  display: none !important;
-}}
+/* ---------- Hero ---------- */
 
-.section-title {{
-  display: inline-block;
-  padding: 7px 12px;
-  background: #f3f4f6;
-  border: 1px solid #111111;
-  border-radius: 0px;
-  font-weight: 900;
-  color: #111111;
-  margin: 0 0 10px 0;
-  letter-spacing: -0.01em;
-}}
-.section-title.tight {{ margin-bottom: 6px; }}
-
-[data-testid="stButton"] > button,
-[data-testid="stFormSubmitButton"] > button {{
-  background: #ffffff !important;
-  color: #111111 !important;
-  border: 1px solid #111111 !important;
-  border-radius: 0px !important;
-  box-shadow: none !important;
-  font-weight: 800 !important;
-  padding: 0.55rem 0.75rem !important;
-}}
-[data-testid="stButton"] > button:hover,
-[data-testid="stFormSubmitButton"] > button:hover {{
-  background: #f3f4f6 !important;
-}}
-[data-testid="stButton"] > button:active,
-[data-testid="stFormSubmitButton"] > button:active {{
-  background: #e5e7eb !important;
-}}
-
-[data-testid="stTextInput"] input,
-[data-testid="stTextArea"] textarea {{
-  border-radius: 0px !important;
-  border: 1px solid rgba(17,17,17,0.55) !important;
-  background: #ffffff !important;
-  color: #111111 !important;
-}}
-
-[data-testid="stTextInput"] input:focus,
-[data-testid="stTextArea"] textarea:focus {{
-  outline: none !important;
-  box-shadow: 0 0 0 2px rgba(17,17,17,0.18) !important;
-  border-color: #111111 !important;
-}}
-
-[data-testid="stVerticalBlockBorderWrapper"] {{
-  border: 1px solid #111111 !important;
-  border-radius: 0px !important;
-  background: #ffffff !important;
-}}
-
-hr {{
-  margin: 1.1rem 0;
-  border: none;
-  border-top: 1px solid rgba(17,17,17,0.18);
-}}
-
-/* ===== Tabs: 연회색 박스 처리 ===== */
-[data-testid="stTabs"] button {{
-  background: #f3f4f6 !important;
-  border: 1px solid #111111 !important;
-  border-bottom: none !important;
-  border-radius: 0px !important;
-  padding: 8px 12px !important;
-  font-weight: 900 !important;
-  color: #111111 !important;
-}}
-[data-testid="stTabs"] button[aria-selected="true"] {{
-  background: #e5e7eb !important;
-}}
-/* 탭 아래 라인도 블랙&화이트로 */
-[data-testid="stTabs"] [data-baseweb="tab-border"] {{
-  background: #111111 !important;
-}}
-
-/* ===== Chat input: 연회색 배경 ===== */
-[data-testid="stChatInput"] textarea {{
-  background: #f3f4f6 !important;
-  border: 1px solid rgba(17,17,17,0.55) !important;
-  color: #111111 !important;
-  border-radius: 0px !important;
-}}
-[data-testid="stChatInput"] textarea:focus {{
-  box-shadow: 0 0 0 2px rgba(17,17,17,0.18) !important;
-  border-color: #111111 !important;
-}}
-
-/* ===== Calendar: 우물정 ===== */
-.cal-weekdays {{
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 0px;
-  margin-top: 8px;
-  border: 1px solid #111111;
-  border-bottom: none;
-}}
-.cal-weekdays > div {{
-  text-align: center;
-  font-size: 0.82rem;
-  padding: 6px 0;
-  background: #f3f4f6;
-  border-right: 1px solid #111111;
-}}
-.cal-weekdays > div:last-child {{
-  border-right: none;
-}}
-
-.cal-grid {{
-  border: 1px solid #111111;
-  border-top: none;
-}}
-.cal-grid [data-testid="stHorizontalBlock"] {{
-  gap: 0px !important;
-}}
-.cal-grid [data-testid="column"] {{
-  padding-left: 0px !important;
-  padding-right: 0px !important;
-}}
-.cal-grid [data-testid="stButton"] > button {{
-  width: 100% !important;
-  min-height: 38px !important;
-  padding: 0px !important;
-  margin: 0px !important;
-
-  border-radius: 0px !important;
-  border: none !important;
-  background: #ffffff !important;
-
-  font-size: 0.92rem !important;
-  line-height: 1 !important;
-  white-space: nowrap !important;
-  font-weight: 800 !important;
-
-  box-shadow: inset -1px -1px 0 0 #111111;
-}}
-
-/* Hero */
 .failog-hero {{
+  margin-top: 8px;   /* 🔥 위에서 살짝 더 내려줌 */
   border: 1px solid #111111;
   border-radius: 0px;
-  padding: 14px 14px;
+  padding: 16px 18px;
   background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }}
+
+.hero-left {{
+  display: flex;
+  flex-direction: column;
+}}
+
 .failog-title {{
-  font-size: 2.25rem;
+  font-size: 2.4rem;
   font-weight: 900;
   letter-spacing: -0.02em;
   margin: 0;
-  line-height: 1.08;
+  line-height: 1.15;   /* 🔥 잘림 방지 */
   color: #111111;
 }}
+
 .failog-sub {{
   margin-top: 6px;
-  color: rgba(17,17,17,0.78) !important;
+  color: rgba(17,17,17,0.75);
   font-size: 1.02rem;
+}}
+
+.hero-gif {{
+  height: 60px;       /* GIF 크기 조절 */
+  width: auto;
 }}
 
 {dynamic}
@@ -235,8 +112,17 @@ def render_hero():
     st.markdown(
         """
 <div class="failog-hero">
-  <div class="failog-title">FAILOG</div>
-  <div class="failog-sub">실패를 성공으로 — 계획과 습관의 실패를 기록하고, 패턴을 이해하고, 다음 주를 설계해요.</div>
+  <div class="hero-left">
+    <div class="failog-title">FAILOG</div>
+    <div class="failog-sub">
+      실패를 성공으로 — 계획과 습관의 실패를 기록하고, 패턴을 이해하고, 다음 주를 설계해요.
+    </div>
+  </div>
+
+  <!-- 🔥 오른쪽 GIF -->
+  <div>
+    <img src="assets/hero.gif" class="hero-gif">
+  </div>
 </div>
 """,
         unsafe_allow_html=True,
