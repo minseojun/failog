@@ -121,7 +121,7 @@ def render_hero():
 
   <!-- 🔥 오른쪽 GIF -->
   <div>
-    <img src="assets/hero.gif" class="hero-gif">
+    <img src="assets/hamster.gif" class="hero-gif">
   </div>
 </div>
 """,
