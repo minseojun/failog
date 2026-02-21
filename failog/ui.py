@@ -12,14 +12,12 @@ def inject_css(today: date | None = None, selected: date | None = None):
     dynamic = ""
     if today_iso:
         dynamic += f"""
-/* Today highlight (calendar button key: cal_YYYY-MM-DD) */
 .st-key-cal_{today_iso} button {{
   background: #e5e7eb !important;
 }}
 """
     if sel_iso:
         dynamic += f"""
-/* Selected highlight */
 .st-key-cal_{sel_iso} button {{
   box-shadow: inset 0 0 0 2px #111111 !important;
 }}
@@ -30,7 +28,6 @@ def inject_css(today: date | None = None, selected: date | None = None):
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
 
-/* ---- Layout ---- */
 .block-container {{
   max-width: 1240px;
   padding-top: 1.0rem;
@@ -40,31 +37,30 @@ def inject_css(today: date | None = None, selected: date | None = None):
   background: #ffffff !important;
 }}
 
-/* ---- Global typography ---- */
 html, body, [class*="css"] {{
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
                Arial, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif !important;
   color: #111111 !important;
 }}
 
-/* Fix white-on-white issues everywhere */
 label, p, span, div, small, li, summary {{
   color: #111111 !important;
 }}
+
+/* 캡션이 너무 연해 보인다고 했으니 조금 더 진하게 */
 [data-testid="stCaptionContainer"] {{
-  color: rgba(17,17,17,0.70) !important;
+  color: rgba(17,17,17,0.78) !important;
   font-size: 0.92rem;
 }}
+
 ::placeholder {{
   color: rgba(17,17,17,0.45) !important;
 }}
 
-/* ---- Remove custom pills completely ---- */
 .pill, .pill-strong {{
   display: none !important;
 }}
 
-/* ---- Section title: grey rectangular emphasis ---- */
 .section-title {{
   display: inline-block;
   padding: 7px 12px;
@@ -78,7 +74,6 @@ label, p, span, div, small, li, summary {{
 }}
 .section-title.tight {{ margin-bottom: 6px; }}
 
-/* ---- Buttons (ALL kinds) -> white bg + black border ---- */
 [data-testid="stButton"] > button,
 [data-testid="stFormSubmitButton"] > button {{
   background: #ffffff !important;
@@ -97,14 +92,7 @@ label, p, span, div, small, li, summary {{
 [data-testid="stFormSubmitButton"] > button:active {{
   background: #e5e7eb !important;
 }}
-[data-testid="stButton"] > button:disabled,
-[data-testid="stFormSubmitButton"] > button:disabled {{
-  opacity: 0.55 !important;
-  color: #111111 !important;
-  border-color: rgba(17,17,17,0.55) !important;
-}}
 
-/* ---- Inputs ---- */
 [data-testid="stTextInput"] input,
 [data-testid="stTextArea"] textarea {{
   border-radius: 0px !important;
@@ -112,6 +100,7 @@ label, p, span, div, small, li, summary {{
   background: #ffffff !important;
   color: #111111 !important;
 }}
+
 [data-testid="stTextInput"] input:focus,
 [data-testid="stTextArea"] textarea:focus {{
   outline: none !important;
@@ -119,37 +108,49 @@ label, p, span, div, small, li, summary {{
   border-color: #111111 !important;
 }}
 
-/* ---- Border containers (st.container(border=True)) ---- */
 [data-testid="stVerticalBlockBorderWrapper"] {{
   border: 1px solid #111111 !important;
   border-radius: 0px !important;
   background: #ffffff !important;
 }}
 
-/* ---- Tabs / Expanders: monochrome ---- */
-[data-testid="stTabs"] * {{
-  color: #111111 !important;
-}}
-[data-testid="stExpander"] {{
-  border: 1px solid rgba(17,17,17,0.25) !important;
-  border-radius: 0px !important;
-  background: #ffffff !important;
-}}
-[data-testid="stExpander"] summary {{
-  border-radius: 0px !important;
-  color: #111111 !important;
-}}
-
-/* ---- HR ---- */
 hr {{
   margin: 1.1rem 0;
   border: none;
   border-top: 1px solid rgba(17,17,17,0.18);
 }}
 
-/* =========================================================
-   Calendar (Month): 우물정 grid, no gaps, no wrapping
-   ========================================================= */
+/* ===== Tabs: 연회색 박스 처리 ===== */
+[data-testid="stTabs"] button {{
+  background: #f3f4f6 !important;
+  border: 1px solid #111111 !important;
+  border-bottom: none !important;
+  border-radius: 0px !important;
+  padding: 8px 12px !important;
+  font-weight: 900 !important;
+  color: #111111 !important;
+}}
+[data-testid="stTabs"] button[aria-selected="true"] {{
+  background: #e5e7eb !important;
+}}
+/* 탭 아래 라인도 블랙&화이트로 */
+[data-testid="stTabs"] [data-baseweb="tab-border"] {{
+  background: #111111 !important;
+}}
+
+/* ===== Chat input: 연회색 배경 ===== */
+[data-testid="stChatInput"] textarea {{
+  background: #f3f4f6 !important;
+  border: 1px solid rgba(17,17,17,0.55) !important;
+  color: #111111 !important;
+  border-radius: 0px !important;
+}}
+[data-testid="stChatInput"] textarea:focus {{
+  box-shadow: 0 0 0 2px rgba(17,17,17,0.18) !important;
+  border-color: #111111 !important;
+}}
+
+/* ===== Calendar: 우물정 ===== */
 .cal-weekdays {{
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -198,7 +199,7 @@ hr {{
   box-shadow: inset -1px -1px 0 0 #111111;
 }}
 
-/* ---- Hero ---- */
+/* Hero */
 .failog-hero {{
   border: 1px solid #111111;
   border-radius: 0px;
@@ -215,7 +216,7 @@ hr {{
 }}
 .failog-sub {{
   margin-top: 6px;
-  color: rgba(17,17,17,0.70) !important;
+  color: rgba(17,17,17,0.78) !important;
   font-size: 1.02rem;
 }}
 
