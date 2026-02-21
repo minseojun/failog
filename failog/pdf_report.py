@@ -26,7 +26,7 @@ from failog.constants import (
     TEXT_DARK,
     KST,
 )
-from failog.habits_tasks import get_tasks_range
+from failog.db import get_tasks_range
 from failog.dates import korean_dow
 
 
