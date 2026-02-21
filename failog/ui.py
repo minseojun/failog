@@ -6,18 +6,6 @@ import streamlit as st
 
 
 def inject_css(today: date | None = None, selected: date | None = None):
-    """
-    Black & White minimal theme.
-    Fixes:
-    - Form submit buttons (st.form_submit_button) also styled (no more black buttons)
-    - Calendar: "우물정" grid 붙게, 폭 넓게, 줄바꿈 방지
-    - Today cell: light gray background (cal_YYYY-MM-DD key 기반)
-    - Selected cell: bold inset border (cal_YYYY-MM-DD key 기반)
-    - Pills removed (your custom .pill)
-    - Fix white-on-white text
-    - Better English font: Inter
-    """
-
     today_iso = today.isoformat() if today else ""
     sel_iso = selected.isoformat() if selected else ""
 
@@ -40,11 +28,11 @@ def inject_css(today: date | None = None, selected: date | None = None):
     st.markdown(
         f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
 
 /* ---- Layout ---- */
 .block-container {{
-  max-width: 1240px;              /* 달력 폭 넓히기 */
+  max-width: 1240px;
   padding-top: 1.0rem;
   padding-bottom: 2.2rem;
 }}
@@ -59,8 +47,8 @@ html, body, [class*="css"] {{
   color: #111111 !important;
 }}
 
-/* Fix common "white text on white bg" */
-label, p, span, div, small, li {{
+/* Fix white-on-white issues everywhere */
+label, p, span, div, small, li, summary {{
   color: #111111 !important;
 }}
 [data-testid="stCaptionContainer"] {{
@@ -74,45 +62,33 @@ label, p, span, div, small, li {{
 /* ---- Remove custom pills completely ---- */
 .pill, .pill-strong {{
   display: none !important;
-  border: none !important;
-  background: transparent !important;
 }}
 
 /* ---- Section title: grey rectangular emphasis ---- */
 .section-title {{
   display: inline-block;
-  padding: 6px 10px;
+  padding: 7px 12px;
   background: #f3f4f6;
   border: 1px solid #111111;
   border-radius: 0px;
-  font-weight: 800;
+  font-weight: 900;
   color: #111111;
-  margin: 0 0 8px 0;
+  margin: 0 0 10px 0;
+  letter-spacing: -0.01em;
 }}
 .section-title.tight {{ margin-bottom: 6px; }}
 
 /* ---- Buttons (ALL kinds) -> white bg + black border ---- */
-/* Normal st.button */
-[data-testid="stButton"] > button {{
-  background: #ffffff !important;
-  color: #111111 !important;
-  border: 1px solid #111111 !important;
-  border-radius: 0px !important;
-  box-shadow: none !important;
-  font-weight: 700 !important;
-  padding: 0.55rem 0.75rem !important;
-}}
-/* Form submit button (this is why "추가/습관 저장" stayed black) */
+[data-testid="stButton"] > button,
 [data-testid="stFormSubmitButton"] > button {{
   background: #ffffff !important;
   color: #111111 !important;
   border: 1px solid #111111 !important;
   border-radius: 0px !important;
   box-shadow: none !important;
-  font-weight: 700 !important;
+  font-weight: 800 !important;
   padding: 0.55rem 0.75rem !important;
 }}
-/* Hover/active */
 [data-testid="stButton"] > button:hover,
 [data-testid="stFormSubmitButton"] > button:hover {{
   background: #f3f4f6 !important;
@@ -121,7 +97,6 @@ label, p, span, div, small, li {{
 [data-testid="stFormSubmitButton"] > button:active {{
   background: #e5e7eb !important;
 }}
-/* Disabled readability */
 [data-testid="stButton"] > button:disabled,
 [data-testid="stFormSubmitButton"] > button:disabled {{
   opacity: 0.55 !important;
@@ -144,20 +119,25 @@ label, p, span, div, small, li {{
   border-color: #111111 !important;
 }}
 
-/* ---- Border containers (st.container(border=True)) ----
-   This replaces the old <div class='card'> hack and removes the empty white boxes.
-*/
+/* ---- Border containers (st.container(border=True)) ---- */
 [data-testid="stVerticalBlockBorderWrapper"] {{
   border: 1px solid #111111 !important;
   border-radius: 0px !important;
   background: #ffffff !important;
 }}
 
-/* ---- Expanders: make them square and monochrome ---- */
+/* ---- Tabs / Expanders: monochrome ---- */
+[data-testid="stTabs"] * {{
+  color: #111111 !important;
+}}
 [data-testid="stExpander"] {{
   border: 1px solid rgba(17,17,17,0.25) !important;
   border-radius: 0px !important;
   background: #ffffff !important;
+}}
+[data-testid="stExpander"] summary {{
+  border-radius: 0px !important;
+  color: #111111 !important;
 }}
 
 /* ---- HR ---- */
@@ -193,8 +173,6 @@ hr {{
   border: 1px solid #111111;
   border-top: none;
 }}
-
-/* Remove gaps inside calendar rows */
 .cal-grid [data-testid="stHorizontalBlock"] {{
   gap: 0px !important;
 }}
@@ -202,8 +180,6 @@ hr {{
   padding-left: 0px !important;
   padding-right: 0px !important;
 }}
-
-/* Calendar day buttons: numeric only, no wrapping */
 .cal-grid [data-testid="stButton"] > button {{
   width: 100% !important;
   min-height: 38px !important;
@@ -217,9 +193,8 @@ hr {{
   font-size: 0.92rem !important;
   line-height: 1 !important;
   white-space: nowrap !important;
-  font-weight: 700 !important;
+  font-weight: 800 !important;
 
-  /* internal grid lines */
   box-shadow: inset -1px -1px 0 0 #111111;
 }}
 
@@ -249,6 +224,10 @@ hr {{
 """,
         unsafe_allow_html=True,
     )
+
+
+def section_title(text: str):
+    st.markdown(f"<div class='section-title'>{text}</div>", unsafe_allow_html=True)
 
 
 def render_hero():
