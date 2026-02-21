@@ -11,20 +11,12 @@ import streamlit as st
 
 @lru_cache(maxsize=16)
 def _asset_data_uri(rel_path: str) -> str:
-    """
-    Streamlit에서 <img src="...">로 로컬 파일을 직접 참조하면(정적 서빙 X) 배포 환경에서 깨질 수 있음.
-    그래서 파일을 base64 data URI로 임베드해 100% 안정적으로 표시한다.
-    """
-    # 후보 경로들(레포 구조가 조금 달라도 찾게끔)
     candidates = []
-
-    # 1) 현재 파일 기준 (failog/ui.py)
     here = os.path.dirname(os.path.abspath(__file__))
-    candidates.append(os.path.join(here, rel_path))                          # failog/assets/hamster.gif 같은 경우
-    candidates.append(os.path.join(here, "..", rel_path))                    # failog/../assets/hamster.gif (레포 루트 assets)
-    candidates.append(os.path.join(here, "..", "..", rel_path))              # 더 상위 대비
+    candidates.append(os.path.join(here, rel_path))
+    candidates.append(os.path.join(here, "..", rel_path))
+    candidates.append(os.path.join(here, "..", "..", rel_path))
 
-    # 2) 현재 작업 디렉토리 기준
     cwd = os.getcwd()
     candidates.append(os.path.join(cwd, rel_path))
     candidates.append(os.path.join(cwd, "failog", rel_path))
@@ -34,16 +26,14 @@ def _asset_data_uri(rel_path: str) -> str:
         if os.path.exists(p) and os.path.isfile(p):
             path = p
             break
-
     if path is None:
-        # 깨진 아이콘 대신 "왜 안 뜨는지" 알 수 있게 빈 문자열 반환
         return ""
 
     with open(path, "rb") as f:
         b = f.read()
 
     b64 = base64.b64encode(b).decode("utf-8")
-    # GIF이므로 image/gif
+    # gif/png/jpg 구분 없이 일단 gif로 (너는 hamster.gif 사용)
     return f"data:image/gif;base64,{b64}"
 
 
@@ -89,7 +79,6 @@ label, p, span, div, small, li, summary {{
   color: #111111 !important;
 }}
 
-/* 캡션이 너무 연해 보인다고 했으니 조금 더 진하게 */
 [data-testid="stCaptionContainer"] {{
   color: rgba(17,17,17,0.78) !important;
   font-size: 0.92rem;
@@ -116,6 +105,7 @@ label, p, span, div, small, li, summary {{
 }}
 .section-title.tight {{ margin-bottom: 6px; }}
 
+/* Buttons: 전부 흰 버튼+검은 테두리 */
 [data-testid="stButton"] > button,
 [data-testid="stFormSubmitButton"] > button {{
   background: #ffffff !important;
@@ -162,7 +152,7 @@ hr {{
   border-top: 1px solid rgba(17,17,17,0.18);
 }}
 
-/* ===== Tabs: 연회색 박스 처리 ===== */
+/* ===== Tabs: 연회색 박스 처리 + 아래 검정선 제거 ===== */
 [data-testid="stTabs"] button {{
   background: #f3f4f6 !important;
   border: 1px solid #111111 !important;
@@ -175,8 +165,22 @@ hr {{
 [data-testid="stTabs"] button[aria-selected="true"] {{
   background: #e5e7eb !important;
 }}
+
+/* ✅ 스샷의 '길게 검정색(빨강 조금)선' 제거 포인트
+   Streamlit 버전에 따라 아래 요소가 라인 역할을 함.
+   - tab-border
+   - tab-list 아래 border
+   - focus outline
+*/
 [data-testid="stTabs"] [data-baseweb="tab-border"] {{
-  background: #111111 !important;
+  display: none !important;
+}}
+[data-testid="stTabs"] div[role="tablist"] {{
+  border-bottom: none !important;
+}}
+[data-testid="stTabs"] div[role="tablist"]::after {{
+  display: none !important;
+  content: none !important;
 }}
 
 /* ===== Chat input: 연회색 배경 ===== */
@@ -189,6 +193,23 @@ hr {{
 [data-testid="stChatInput"] textarea:focus {{
   box-shadow: 0 0 0 2px rgba(17,17,17,0.18) !important;
   border-color: #111111 !important;
+}}
+
+/* ===== Failure Report 상단 주 이동 UI(화살표/기간 박스) 조금 더 작게 ===== */
+/* 이건 st.columns로 만든 버튼/컨테이너가 공통 버튼 스타일을 이미 따르므로,
+   글자/패딩/높이만 살짝 줄이는 방식으로 안전하게 처리 */
+.small-nav [data-testid="stButton"] > button {{
+  padding: 0.45rem 0.55rem !important;
+  min-height: 40px !important;
+  font-weight: 800 !important;
+}}
+.small-nav .date-box {{
+  background: #f3f4f6;
+  border: 1px solid #111111;
+  text-align: center;
+  padding: 0.55rem 0.6rem;
+  font-weight: 900;
+  font-size: 1.25rem;
 }}
 
 /* ===== Calendar: 우물정 ===== */
@@ -258,7 +279,7 @@ hr {{
   flex-direction: column;
 }}
 .hero-gif {{
-  height: 90px;
+  height: 52px;
   width: auto;
 }}
 
@@ -289,7 +310,6 @@ def section_title(text: str):
 
 def render_hero():
     gif_uri = _asset_data_uri(os.path.join("assets", "hamster.gif"))
-    # gif가 경로 문제로 못 찾아지면 깨진 아이콘 대신 그냥 안 보이게 처리
     gif_html = f"<img src='{gif_uri}' class='hero-gif' />" if gif_uri else ""
 
     st.markdown(
