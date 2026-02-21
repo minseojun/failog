@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from failog.openai_helpers import openai_client
-from failog.habits_tasks import get_tasks_range, get_all_failures
+from failog.db import get_tasks_range, get_all_failures
 from failog.dates import korean_dow
 
 
