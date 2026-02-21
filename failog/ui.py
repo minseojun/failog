@@ -258,7 +258,7 @@ hr {{
   flex-direction: column;
 }}
 .hero-gif {{
-  height: 80px;
+  height: 90px;
   width: auto;
 }}
 
