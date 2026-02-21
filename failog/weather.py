@@ -1,12 +1,15 @@
 # failog/weather.py
+from __future__ import annotations
+
 from datetime import date
 from typing import Any, Dict, Optional
 
 import requests
 import streamlit as st
 
-from failog.cookies import ck_get, ck_set
-from failog.dates import korean_dow
+from failog.ui import section_title
+from failog.prefs import ck_get, ck_set
+from failog.date_utils import korean_dow
 
 
 WEATHER_CODE_KO = {
@@ -84,8 +87,8 @@ def fetch_daily_weather(lat: float, lon: float, d: date, tz: str = "Asia/Seoul")
 
 
 def weather_card(selected: date):
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("### 🌤️ Weather (Open-Meteo)")
+    # ✅ 요청3: Weather 제목 박스화
+    section_title("Weather (Open-Meteo)")
 
     default_city = ck_get("failog_city", "Seoul")
     city = st.text_input("도시/지역", value=default_city, key="weather_city_input", help="예: Seoul, Busan, Tokyo")
@@ -101,15 +104,13 @@ def weather_card(selected: date):
         ck_set("failog_weather_show", "true" if show else "false")
 
     if ck_get("failog_weather_show", "true") != "true":
-        st.markdown("<div class='small'>날씨 표시가 꺼져 있어요.</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.caption("날씨 표시가 꺼져 있어요.")
         return
 
     try:
         geo = geocode_city(city)
         if not geo:
             st.warning("도시를 찾지 못했어요. 다른 이름으로 시도해보세요.")
-            st.markdown("</div>", unsafe_allow_html=True)
             return
 
         lat, lon = geo["latitude"], geo["longitude"]
@@ -117,15 +118,10 @@ def weather_card(selected: date):
         w = fetch_daily_weather(lat, lon, selected, tz="Asia/Seoul")
         if not w:
             st.info("해당 날짜의 날씨 데이터가 없어요.")
-            st.markdown("</div>", unsafe_allow_html=True)
             return
 
-        st.markdown(
-            f"<span class='pill pill-strong'>{label}</span> "
-            f"<span class='pill'>{selected.isoformat()} ({korean_dow(selected.weekday())})</span>",
-            unsafe_allow_html=True,
-        )
-        st.write("")
+        st.caption(f"{label} · {selected.isoformat()} ({korean_dow(selected.weekday())})")
+
         c1, c2, c3 = st.columns(3)
         c1.metric("상태", w["desc"])
         tmax = w["tmax"]
@@ -134,8 +130,7 @@ def weather_card(selected: date):
         pp = w.get("precip_prob")
         ps = w.get("precip_sum")
         c3.metric("강수", f"{pp}% / {ps}mm" if pp is not None and ps is not None else "—")
+
         st.caption("데이터 출처: Open-Meteo")
     except Exception as e:
         st.error(f"날씨 로딩 실패: {type(e).__name__}")
-    finally:
-        st.markdown("</div>", unsafe_allow_html=True)
