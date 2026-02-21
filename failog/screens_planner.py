@@ -198,9 +198,10 @@ def screen_planner(user_id: str):
 
             if pr:
                 st.markdown("<hr/>", unsafe_allow_html=True)
-                st.write(f"**위험도 점수: {int(pr['score'])}/100**")
-                for r in (pr.get("reasons") or [])[:4]:
-                    st.write(f"- {r}")
+                st.write(f"**위험도 점수: {pr['score']}/100**")
+                
+                if pr.get("ai_score") is not None:
+                    st.caption(f"(AI 실행가능성 평가: {pr['ai_score']} / 패턴 기반: {pr['pattern_score']})")
 
                 # 트리거/고위험이면 전략 제안
                 if int(pr["score"]) >= 70 or bool(pr.get("trigger")):
