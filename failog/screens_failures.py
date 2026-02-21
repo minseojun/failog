@@ -1,4 +1,5 @@
-# failog/screens_failures.py
+# failog/screens_failures.py (IMPORTS ONLY - replace the top imports with this)
+
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -7,25 +8,34 @@ import json
 import altair as alt
 import streamlit as st
 
-from failog.date_utils import week_start, korean_dow
+from failog.date_utils import week_start
 from failog.ui import section_title
-from failog.db import get_tasks_range, get_all_failures
-from failog.pdf_report import failures_by_dow, ensure_korean_font_downloaded, build_weekly_pdf_bytes
-from failog.categorization import get_or_build_category_map, weekly_category_trend
-from failog.coaching import (
-    consent_value,
-    effective_openai_key,
-    effective_openai_model,
-    llm_weekly_reason_analysis,
-    llm_overall_coaching,
-    llm_chat,
-    normalize_reason,
-    repeated_reason_flags,
-    compute_user_signals,
-)
-from failog.prefs import ck_get
-from failog.weather import geocode_city  # pdf city label용(있으면)
 
+# DB / data
+from failog.habits_tasks import get_tasks_range, get_all_failures
+
+# PDF
+from failog.pdf_report import failures_by_dow, ensure_korean_font_downloaded, build_weekly_pdf_bytes
+
+# Categorization
+from failog.categorization import get_or_build_category_map, weekly_category_trend
+
+# ✅ Consent / OpenAI prefs (여기서 가져와야 안전함)
+from failog.consent import consent_value  # 너 레포에 consent.py가 있으면 이걸로
+from failog.openai_prefs import effective_openai_key, effective_openai_model  # 너 레포에 이 파일이 있으면 이걸로
+
+# ✅ LLM functions (코칭/챗은 coaching.py에 남겨두는 게 자연스러움)
+from failog.coaching import llm_weekly_reason_analysis, llm_overall_coaching, llm_chat
+from failog.coaching import normalize_reason, repeated_reason_flags, compute_user_signals
+
+# misc
+from failog.prefs import ck_get
+
+# pdf city label용 (있으면)
+try:
+    from failog.weather import geocode_city
+except Exception:
+    geocode_city = None
 
 # 기존 top_reasons/plot 등은 pdf_report에 있는 걸 사용하고, 여기선 화면 로직만 유지
 
