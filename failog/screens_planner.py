@@ -5,7 +5,6 @@ from datetime import date, datetime, timedelta
 
 import streamlit as st
 
-# Optional autorefresh
 try:
     from streamlit_autorefresh import st_autorefresh
 except Exception:
@@ -35,10 +34,11 @@ from failog.weather import weather_card
 
 
 def screen_planner(user_id: str):
-    # Re-inject CSS with dynamic today/selected highlight rules
     if "selected_date" not in st.session_state:
         st.session_state["selected_date"] = date.today()
     selected: date = st.session_state["selected_date"]
+
+    # dynamic CSS for today/selected calendar cells
     inject_css(today=date.today(), selected=selected)
 
     st.markdown("<div class='section-title tight'>Planner</div>", unsafe_allow_html=True)
@@ -49,9 +49,7 @@ def screen_planner(user_id: str):
     ws = week_start(selected)
     ensure_week_habit_tasks(user_id, ws)
 
-    # -------------------------
-    # Reminder
-    # -------------------------
+    # Reminder settings
     en = (ck_get("failog_rem_enabled", "true").lower() == "true")
     rt_str = ck_get("failog_rem_time", "21:30")
     win_str = ck_get("failog_rem_win", "15")
@@ -66,73 +64,66 @@ def screen_planner(user_id: str):
         if todos > 0:
             st.toast(f"⏰ 아직 체크하지 않은 항목이 {todos}개 있어요", icon="⏰")
 
-    # 넓히기: 달력 폭 문제 해결을 위해 left 비율을 키움
+    # widen calendar area: left column bigger
     left, right = st.columns([1.35, 1.65], gap="large")
 
     # =========================
     # LEFT: Month + reminder + weather
     # =========================
     with left:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("<div class='section-title'>Month</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<div class='section-title'>Month</div>", unsafe_allow_html=True)
 
-        y, m = selected.year, selected.month
-        nav = st.columns([1, 2, 1])
-        with nav[0]:
-            if st.button("◀", use_container_width=True, key="m_prev"):
-                if m == 1:
-                    y -= 1
-                    m = 12
-                else:
-                    m -= 1
-                st.session_state["selected_date"] = date(y, m, 1)
-                st.rerun()
-        with nav[1]:
-            st.markdown(
-                f"<div style='text-align:center; font-weight:900; font-size:1.05rem;'>{y}.{m:02d}</div>",
-                unsafe_allow_html=True,
-            )
-        with nav[2]:
-            if st.button("▶", use_container_width=True, key="m_next"):
-                if m == 12:
-                    y += 1
-                    m = 1
-                else:
-                    m += 1
-                st.session_state["selected_date"] = date(y, m, 1)
-                st.rerun()
-
-        # Weekday header grid (우물정 느낌)
-        st.markdown(
-            "<div class='cal-weekdays'>"
-            + "".join([f"<div>{k}</div>" for k in ["월", "화", "수", "목", "금", "토", "일"]])
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Calendar grid (no gaps)
-        st.markdown("<div class='cal-grid'>", unsafe_allow_html=True)
-
-        grid = month_grid(y, m)
-        today = date.today()
-
-        for row in grid:
-            cols = st.columns(7, gap="small")  # gap은 CSS에서 0으로 덮어씀
-            for i, d in enumerate(row):
-                if d is None:
-                    # 빈 칸도 높이 맞춰서 그리드 유지
-                    cols[i].markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
-                    continue
-
-                label = str(d.day)  # 줄바꿈 방지: 숫자만
-
-                # key가 중요: CSS에서 st-key-cal_YYYY-MM-DD로 오늘/선택 하이라이트
-                if cols[i].button(label, key=f"cal_{d.isoformat()}", use_container_width=True):
-                    st.session_state["selected_date"] = d
+            y, m = selected.year, selected.month
+            nav = st.columns([1, 2, 1])
+            with nav[0]:
+                if st.button("◀", use_container_width=True, key="m_prev"):
+                    if m == 1:
+                        y -= 1
+                        m = 12
+                    else:
+                        m -= 1
+                    st.session_state["selected_date"] = date(y, m, 1)
+                    st.rerun()
+            with nav[1]:
+                st.markdown(
+                    f"<div style='text-align:center; font-weight:900; font-size:1.05rem;'>{y}.{m:02d}</div>",
+                    unsafe_allow_html=True,
+                )
+            with nav[2]:
+                if st.button("▶", use_container_width=True, key="m_next"):
+                    if m == 12:
+                        y += 1
+                        m = 1
+                    else:
+                        m += 1
+                    st.session_state["selected_date"] = date(y, m, 1)
                     st.rerun()
 
-        st.markdown("</div>", unsafe_allow_html=True)  # close cal-grid
-        st.markdown("</div>", unsafe_allow_html=True)  # close card
+            st.markdown(
+                "<div class='cal-weekdays'>"
+                + "".join([f"<div>{k}</div>" for k in ["월", "화", "수", "목", "금", "토", "일"]])
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("<div class='cal-grid'>", unsafe_allow_html=True)
+
+            grid = month_grid(y, m)
+            for row in grid:
+                cols = st.columns(7, gap="small")
+                for i, d in enumerate(row):
+                    if d is None:
+                        cols[i].markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
+                        continue
+
+                    label = str(d.day)  # 숫자만: 줄바꿈 방지
+
+                    if cols[i].button(label, key=f"cal_{d.isoformat()}", use_container_width=True):
+                        st.session_state["selected_date"] = d
+                        st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)  # cal-grid
 
         with st.expander("알림 설정", expanded=False):
             en_ui = st.toggle("리마인더 켜기", value=en, key="rem_en_ui")
@@ -144,174 +135,170 @@ def screen_planner(user_id: str):
                 ck_set("failog_rem_win", str(int(w_ui)))
                 st.success("저장됐어요.")
 
-        # Weather (기능 유지)
-        weather_card(selected)
+        # weather area also in border container to stay consistent
+        with st.container(border=True):
+            weather_card(selected)
 
     # =========================
     # RIGHT: Selected Day tasks & habit manager
     # =========================
     with right:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown(
+                f"<div class='section-title'>"
+                f"{selected.isoformat()} ({korean_dow(selected.weekday())})"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-        st.markdown(
-            f"<div class='section-title'>"
-            f"{selected.isoformat()} ({korean_dow(selected.weekday())})"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        # ---- Plan add (button style is now white+border via CSS) ----
-        with st.form("plan_add_form", clear_on_submit=True):
-            c1, c2 = st.columns([4, 1])
-            with c1:
-                plan_text = st.text_input(
-                    "계획 추가(1회성)",
-                    placeholder="예: 독서 10분 / 이메일 정리",
-                    key="plan_text_input",
-                )
-            with c2:
-                submitted = st.form_submit_button("추가", use_container_width=True)
-            if submitted:
-                add_plan_task(user_id, selected, plan_text)
-                st.rerun()
-
-        # ---- Habit manager ----
-        with st.expander("습관(반복) 관리", expanded=False):
-            with st.form("habit_add_form", clear_on_submit=True):
-                hc1, hc2 = st.columns([3, 2])
-                with hc1:
-                    habit_title = st.text_input("습관 이름", placeholder="예: 운동 10분", key="habit_title_input")
-                with hc2:
-                    dow_labels = [korean_dow(i) for i in range(7)]
-                    picked = st.multiselect(
-                        "반복 요일",
-                        options=list(range(7)),
-                        format_func=lambda x: dow_labels[x],
-                        default=[0, 1, 2, 3, 4],
-                        key="habit_dow_input",
+            # Plan add (FORM SUBMIT BUTTON now styled via CSS)
+            with st.form("plan_add_form", clear_on_submit=True):
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    plan_text = st.text_input(
+                        "계획 추가(1회성)",
+                        placeholder="예: 독서 10분 / 이메일 정리",
+                        key="plan_text_input",
                     )
-
-                habit_submit = st.form_submit_button("습관 저장", use_container_width=True)
-                if habit_submit:
-                    add_habit(user_id, habit_title, picked)
-                    ensure_week_habit_tasks(user_id, week_start(selected))
-                    st.success("습관을 저장했어요.")
+                with c2:
+                    submitted = st.form_submit_button("추가", use_container_width=True)
+                if submitted:
+                    add_plan_task(user_id, selected, plan_text)
                     st.rerun()
 
-            hdf = list_habits(user_id, active_only=False)
-            if hdf.empty:
-                st.markdown("<div class='small'>아직 습관이 없어요.</div>", unsafe_allow_html=True)
-            else:
-                for _, h in hdf.iterrows():
-                    hid = int(h["id"])
-                    title = str(h["title"])
-                    mask = str(h["dow_mask"] or "0000000")
-                    active = int(h["active"]) == 1
-                    days_txt = " ".join([korean_dow(i) for i in range(7) if len(mask) == 7 and mask[i] == "1"]) or "—"
+            # Habit manager (expander button is streamlit UI; ok)
+            with st.expander("습관(반복) 관리", expanded=False):
+                with st.form("habit_add_form", clear_on_submit=True):
+                    hc1, hc2 = st.columns([3, 2])
+                    with hc1:
+                        habit_title = st.text_input("습관 이름", placeholder="예: 운동 10분", key="habit_title_input")
+                    with hc2:
+                        dow_labels = [korean_dow(i) for i in range(7)]
+                        picked = st.multiselect(
+                            "반복 요일",
+                            options=list(range(7)),
+                            format_func=lambda x: dow_labels[x],
+                            default=[0, 1, 2, 3, 4],
+                            key="habit_dow_input",
+                        )
 
-                    st.markdown("<hr/>", unsafe_allow_html=True)
-                    st.markdown(f"**{title}**  ·  {days_txt}")
+                    habit_submit = st.form_submit_button("습관 저장", use_container_width=True)
+                    if habit_submit:
+                        add_habit(user_id, habit_title, picked)
+                        ensure_week_habit_tasks(user_id, week_start(selected))
+                        st.success("습관을 저장했어요.")
+                        st.rerun()
 
-                    a, b, c = st.columns([1, 1, 1], gap="small")
-                    with a:
-                        if st.button("ON" if active else "OFF", key=f"hab_toggle_{hid}", use_container_width=True):
-                            set_habit_active(user_id, hid, not active)
-                            ensure_week_habit_tasks(user_id, week_start(selected))
-                            st.rerun()
-                    with b:
-                        if st.button("삭제", key=f"hab_del_{hid}", use_container_width=True):
-                            delete_habit(user_id, hid)
-                            st.success("습관을 삭제했어요.")
-                            st.rerun()
-                    with c:
-                        st.write("")  # layout align
+                hdf = list_habits(user_id, active_only=False)
+                if hdf.empty:
+                    st.markdown("<div class='small'>아직 습관이 없어요.</div>", unsafe_allow_html=True)
+                else:
+                    for _, h in hdf.iterrows():
+                        hid = int(h["id"])
+                        title = str(h["title"])
+                        mask = str(h["dow_mask"] or "0000000")
+                        active = int(h["active"]) == 1
+                        days_txt = " ".join([korean_dow(i) for i in range(7) if len(mask) == 7 and mask[i] == "1"]) or "—"
 
-                    # ---- Requirement #5: allow success/fail/reason for this habit on selected date ----
-                    info = get_habit_task_for_date(user_id, selected, hid)
-                    if info:
-                        task_id, t_status, t_reason = info
-                        st.caption(f"선택 날짜 상태: {t_status}")
+                        st.markdown("<hr/>", unsafe_allow_html=True)
+                        st.markdown(f"**{title}**  ·  {days_txt}")
 
-                        x1, x2, x3 = st.columns([1, 1, 1], gap="small")
-                        with x1:
-                            if st.button("성공", key=f"hab_s_{task_id}", use_container_width=True):
-                                update_task_status(user_id, task_id, "success")
-                                st.session_state.pop(f"hab_show_fail_{task_id}", None)
+                        a, b, c = st.columns([1, 1, 1], gap="small")
+                        with a:
+                            if st.button("ON" if active else "OFF", key=f"hab_toggle_{hid}", use_container_width=True):
+                                set_habit_active(user_id, hid, not active)
+                                ensure_week_habit_tasks(user_id, week_start(selected))
                                 st.rerun()
-                        with x2:
-                            if st.button("실패", key=f"hab_f_{task_id}", use_container_width=True):
-                                st.session_state[f"hab_show_fail_{task_id}"] = True
-                        with x3:
-                            if st.button("삭제", key=f"hab_del_task_{task_id}", use_container_width=True):
-                                delete_task(user_id, task_id)
-                                st.session_state.pop(f"hab_show_fail_{task_id}", None)
+                        with b:
+                            if st.button("삭제", key=f"hab_del_{hid}", use_container_width=True):
+                                delete_habit(user_id, hid)
+                                st.success("습관을 삭제했어요.")
                                 st.rerun()
+                        with c:
+                            st.write("")
 
-                        if st.session_state.get(f"hab_show_fail_{task_id}", False):
-                            r_in = st.text_input("실패 원인", value=t_reason, key=f"hab_reason_{task_id}")
-                            y1, y2 = st.columns([1, 4], gap="small")
-                            with y1:
-                                if st.button("원인 저장", key=f"hab_reason_save_{task_id}", use_container_width=True):
-                                    update_task_fail(user_id, task_id, r_in)
-                                    st.session_state[f"hab_show_fail_{task_id}"] = False
+                        info = get_habit_task_for_date(user_id, selected, hid)
+                        if info:
+                            task_id, t_status, t_reason = info
+                            st.caption(f"선택 날짜 상태: {t_status}")
+
+                            x1, x2, x3 = st.columns([1, 1, 1], gap="small")
+                            with x1:
+                                if st.button("성공", key=f"hab_s_{task_id}", use_container_width=True):
+                                    update_task_status(user_id, task_id, "success")
+                                    st.session_state.pop(f"hab_show_fail_{task_id}", None)
                                     st.rerun()
-                            with y2:
-                                st.caption("짧아도 좋아요. ‘무슨 조건 때문에’가 핵심이에요.")
-                    else:
-                        st.caption("이 날짜에는 이 습관이 생성되지 않아요. (선택한 요일이 아닐 수 있어요)")
+                            with x2:
+                                if st.button("실패", key=f"hab_f_{task_id}", use_container_width=True):
+                                    st.session_state[f"hab_show_fail_{task_id}"] = True
+                            with x3:
+                                if st.button("삭제", key=f"hab_del_task_{task_id}", use_container_width=True):
+                                    delete_task(user_id, task_id)
+                                    st.session_state.pop(f"hab_show_fail_{task_id}", None)
+                                    st.rerun()
 
-        st.markdown("<hr/>", unsafe_allow_html=True)
+                            if st.session_state.get(f"hab_show_fail_{task_id}", False):
+                                r_in = st.text_input("실패 원인", value=t_reason, key=f"hab_reason_{task_id}")
+                                y1, y2 = st.columns([1, 4], gap="small")
+                                with y1:
+                                    if st.button("원인 저장", key=f"hab_reason_save_{task_id}", use_container_width=True):
+                                        update_task_fail(user_id, task_id, r_in)
+                                        st.session_state[f"hab_show_fail_{task_id}"] = False
+                                        st.rerun()
+                                with y2:
+                                    st.caption("짧아도 좋아요. ‘무슨 조건 때문에’가 핵심이에요.")
+                        else:
+                            st.caption("이 날짜에는 이 습관이 생성되지 않아요. (선택한 요일이 아닐 수 있어요)")
 
-        # ---- Task list for selected date ----
-        df = list_tasks_for_date(user_id, selected)
-        if df.empty:
-            st.markdown("<div class='small'>아직 항목이 없어요.</div>", unsafe_allow_html=True)
-        else:
-            for _, r in df.iterrows():
-                tid = int(r["id"])
-                src = str(r["source"])
-                status = str(r["status"])
-                text = str(r["text"])
-                reason = str(r["fail_reason"] or "")
+            st.markdown("<hr/>", unsafe_allow_html=True)
 
-                status_icon = {"todo": "⏳", "success": "✅", "fail": "❌"}.get(status, "⏳")
-                badge = "Habit" if src == "habit" else "Plan"
+            df = list_tasks_for_date(user_id, selected)
+            if df.empty:
+                st.markdown("<div class='small'>아직 항목이 없어요.</div>", unsafe_allow_html=True)
+            else:
+                for _, r in df.iterrows():
+                    tid = int(r["id"])
+                    src = str(r["source"])
+                    status = str(r["status"])
+                    text = str(r["text"])
+                    reason = str(r["fail_reason"] or "")
 
-                st.markdown("<div class='task'>", unsafe_allow_html=True)
+                    status_icon = {"todo": "⏳", "success": "✅", "fail": "❌"}.get(status, "⏳")
+                    badge = "Habit" if src == "habit" else "Plan"
 
-                top = st.columns([6, 1.2, 1.2, 1.2], gap="small")
-                with top[0]:
-                    st.markdown(f"**{status_icon} {text}**  ({badge})")
-                    if status == "fail" and reason.strip():
-                        st.caption(f"실패 원인: {reason}")
+                    st.markdown("<div class='task'>", unsafe_allow_html=True)
 
-                with top[1]:
-                    if st.button("성공", key=f"s_{tid}", use_container_width=True):
-                        update_task_status(user_id, tid, "success")
-                        st.session_state.pop(f"show_fail_{tid}", None)
-                        st.rerun()
+                    top = st.columns([6, 1.2, 1.2, 1.2], gap="small")
+                    with top[0]:
+                        st.markdown(f"**{status_icon} {text}**  ({badge})")
+                        if status == "fail" and reason.strip():
+                            st.caption(f"실패 원인: {reason}")
 
-                with top[2]:
-                    if st.button("실패", key=f"f_{tid}", use_container_width=True):
-                        st.session_state[f"show_fail_{tid}"] = True
-
-                with top[3]:
-                    if st.button("삭제", key=f"del_{tid}", use_container_width=True):
-                        delete_task(user_id, tid)
-                        st.session_state.pop(f"show_fail_{tid}", None)
-                        st.rerun()
-
-                if st.session_state.get(f"show_fail_{tid}", False):
-                    reason_in = st.text_input("실패 원인(한 문장)", value=reason, key=f"r_{tid}")
-                    a, b = st.columns([1, 4], gap="small")
-                    with a:
-                        if st.button("저장", key=f"save_fail_{tid}", use_container_width=True):
-                            update_task_fail(user_id, tid, reason_in)
-                            st.session_state[f"show_fail_{tid}"] = False
+                    with top[1]:
+                        if st.button("성공", key=f"s_{tid}", use_container_width=True):
+                            update_task_status(user_id, tid, "success")
+                            st.session_state.pop(f"show_fail_{tid}", None)
                             st.rerun()
-                    with b:
-                        st.caption("짧아도 좋아요. ‘무슨 조건 때문에’가 핵심이에요.")
 
-                st.markdown("</div>", unsafe_allow_html=True)
+                    with top[2]:
+                        if st.button("실패", key=f"f_{tid}", use_container_width=True):
+                            st.session_state[f"show_fail_{tid}"] = True
 
-        st.markdown("</div>", unsafe_allow_html=True)  # close card
+                    with top[3]:
+                        if st.button("삭제", key=f"del_{tid}", use_container_width=True):
+                            delete_task(user_id, tid)
+                            st.session_state.pop(f"show_fail_{tid}", None)
+                            st.rerun()
+
+                    if st.session_state.get(f"show_fail_{tid}", False):
+                        reason_in = st.text_input("실패 원인(한 문장)", value=reason, key=f"r_{tid}")
+                        a, b = st.columns([1, 4], gap="small")
+                        with a:
+                            if st.button("저장", key=f"save_fail_{tid}", use_container_width=True):
+                                update_task_fail(user_id, tid, reason_in)
+                                st.session_state[f"show_fail_{tid}"] = False
+                                st.rerun()
+                        with b:
+                            st.caption("짧아도 좋아요. ‘무슨 조건 때문에’가 핵심이에요.")
+
+                    st.markdown("</div>", unsafe_allow_html=True)
