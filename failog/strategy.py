@@ -1,156 +1,72 @@
-# failog/risk.py
+# failog/strategy.py
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from datetime import date, timedelta
-from typing import List, Dict, Any, Tuple
-
-import pandas as pd
-
-from failog.habits_tasks import get_tasks_range
-
-
-def _norm_text(s: str) -> str:
-    s = (s or "").strip().lower()
-    s = re.sub(r"\s+", " ", s)
-    # 너무 공격적으로 지우면 매칭이 깨질 수 있어 최소만
-    return s
+from typing import List
 
 
 @dataclass
-class RiskResult:
-    score: int
-    reasons: List[str]
-    stats: Dict[str, Any]
-    repeated_trigger: bool
+class StrategySuggestion:
+    name: str
+    description: str
+    texts: List[str]
 
 
-def _fail_rate(df: pd.DataFrame) -> float:
-    if df is None or df.empty:
-        return 0.0
-    fail = int((df["status"] == "fail").sum())
-    total = int(len(df))
-    return (fail / total) if total > 0 else 0.0
+def _clean_text(t: str) -> str:
+    return (t or "").strip()
 
 
-def _same_text_fail_rate(df: pd.DataFrame, text: str) -> Tuple[float, int, int]:
-    """최근 데이터에서 동일 plan 텍스트의 실패율"""
-    if df.empty:
-        return 0.0, 0, 0
-    nt = _norm_text(text)
-    x = df[df["source"] == "plan"].copy()
-    if x.empty:
-        return 0.0, 0, 0
-    x["nt"] = x["text"].fillna("").map(_norm_text)
-    sub = x[x["nt"] == nt]
-    if sub.empty:
-        return 0.0, 0, 0
-    total = int(len(sub))
-    fail = int((sub["status"] == "fail").sum())
-    return (fail / total) if total else 0.0, fail, total
-
-
-def _dow_fail_rate(df: pd.DataFrame, dow: int) -> Tuple[float, int, int]:
-    """해당 요일(dow=0..6)의 실패율"""
-    if df.empty:
-        return 0.0, 0, 0
-    x = df.copy()
-    x["task_date"] = pd.to_datetime(x["task_date"]).dt.date
-    x["dow"] = x["task_date"].map(lambda d: d.weekday())
-    sub = x[x["dow"] == int(dow)]
-    if sub.empty:
-        return 0.0, 0, 0
-    total = int(len(sub))
-    fail = int((sub["status"] == "fail").sum())
-    return (fail / total) if total else 0.0, fail, total
-
-
-def repeated_plan_trigger(user_id: str, text: str, lookback_days: int = 28, threshold: int = 3) -> bool:
-    """최근 N일 동일 plan 텍스트 fail 횟수 >= threshold"""
-    end = date.today()
-    start = end - timedelta(days=lookback_days - 1)
-    df = get_tasks_range(user_id, start, end)
-    if df.empty:
-        return False
-    nt = _norm_text(text)
-    x = df[df["source"] == "plan"].copy()
-    if x.empty:
-        return False
-    x["nt"] = x["text"].fillna("").map(_norm_text)
-    sub = x[(x["nt"] == nt) & (x["status"] == "fail")]
-    return int(len(sub)) >= int(threshold)
-
-
-def risk_score_plan(user_id: str, target_date: date, text: str) -> RiskResult:
+def suggest_strategies_for_plan(plan_text: str) -> List[StrategySuggestion]:
     """
-    룰 기반 리스크 점수(0~100)
-    - 최근 14일 전체 실패율
-    - 해당 요일 실패율
-    - 동일 텍스트(plan) 실패율 (최근 56일)
-    - 반복실패 트리거(최근 28일 동일 텍스트 fail>=3)
+    입력한 계획(plan_text)을 "바로 저장 가능한" 더 실행하기 쉬운 형태로 쪼개거나
+    실패 위험을 낮추는 표현으로 바꾸는 전략을 제안한다.
+
+    반환:
+      List[StrategySuggestion]
+      - texts: add_plan_task로 그대로 저장할 문자열 리스트
     """
-    text = (text or "").strip()
-    if not text:
-        return RiskResult(score=0, reasons=["입력된 계획이 비어 있어요."], stats={}, repeated_trigger=False)
+    p = _clean_text(plan_text)
+    if not p:
+        return []
 
-    # window들
-    end14 = date.today()
-    start14 = end14 - timedelta(days=13)
-    df14 = get_tasks_range(user_id, start14, end14)
+    # 아주 단순하지만 실사용에 효과적인 기본 전략들
+    suggestions: List[StrategySuggestion] = []
 
-    end56 = date.today()
-    start56 = end56 - timedelta(days=55)
-    df56 = get_tasks_range(user_id, start56, end56)
+    # 1) 최소화(MVP) 전략
+    suggestions.append(
+        StrategySuggestion(
+            name="최소 버전(2분 시작)",
+            description="오늘은 ‘완료’보다 ‘시작’을 목표로. 2분만 해도 성공 처리할 수 있게 줄여요.",
+            texts=[f"{p} (2분만 시작)"],
+        )
+    )
 
-    overall14 = _fail_rate(df14)  # 0~1
-    dow_rate, dow_fail, dow_total = _dow_fail_rate(df56 if not df56.empty else df14, target_date.weekday())
+    # 2) 시간/트리거 고정 전략
+    suggestions.append(
+        StrategySuggestion(
+            name="시간 고정(캘린더 락)",
+            description="언제 할지 모르면 실패 확률이 커져요. 시간을 박아 넣어서 의사결정을 줄여요.",
+            texts=[f"[21:00] {p}", f"[21:10] {p} (정리/마감 3분)"],
+        )
+    )
 
-    same_rate, same_fail, same_total = _same_text_fail_rate(df56, text)
+    # 3) 사전 준비물/환경 세팅
+    suggestions.append(
+        StrategySuggestion(
+            name="환경 세팅(장벽 낮추기)",
+            description="실패의 대부분은 ‘시작 장벽’이에요. 준비를 태스크로 분리해요.",
+            texts=[f"{p} 준비물/환경 세팅(3분)", p],
+        )
+    )
 
-    trig = repeated_plan_trigger(user_id, text, lookback_days=28, threshold=3)
+    # 4) If-Then 실행 장치
+    suggestions.append(
+        StrategySuggestion(
+            name="If-Then 방어 플랜",
+            description="방해요인이 생길 때 대체 행동을 정해두면 연쇄 실패를 막기 쉬워요.",
+            texts=[f"If(피곤/늦음) Then: {p}는 ‘최소 버전(2분)’으로만 하기"],
+        )
+    )
 
-    # 점수 구성 (가중치 합 100)
-    score = 0
-    reasons: List[str] = []
-
-    # 전체 컨디션(최근14일)
-    score += int(round(overall14 * 40))
-    if overall14 >= 0.45:
-        reasons.append(f"최근 14일 전체 실패 비율이 높은 편이에요 ({overall14*100:.0f}%).")
-
-    # 요일 패턴
-    score += int(round(dow_rate * 25))
-    if dow_total >= 8 and dow_rate >= 0.45:
-        reasons.append(f"해당 요일에 실패가 자주 발생했어요 ({dow_fail}/{dow_total}).")
-
-    # 동일 계획 실패율
-    score += int(round(same_rate * 25))
-    if same_total >= 3 and same_rate >= 0.50:
-        reasons.append(f"같은 계획이 최근에 자주 실패했어요 ({same_fail}/{same_total}).")
-
-    # 반복 트리거
-    if trig:
-        score += 10
-        reasons.append("이 계획은 최근 28일에 반복 실패 트리거가 걸렸어요(동일 계획 실패 누적).")
-
-    score = max(0, min(100, score))
-
-    if not reasons:
-        if score >= 70:
-            reasons.append("패턴상 실패 가능성이 높아 보여요. 더 작게/더 구체적으로 바꿔보면 좋아요.")
-        elif score >= 40:
-            reasons.append("크게 위험하진 않지만, 성공 확률을 높이려면 범위를 조금 줄여보는 걸 추천해요.")
-        else:
-            reasons.append("리스크가 낮은 편이에요. 지금 형태로도 충분히 가능해 보여요.")
-
-    stats = {
-        "overall14_fail_rate": overall14,
-        "dow_fail_rate": dow_rate,
-        "same_plan_fail_rate": same_rate,
-        "same_plan_counts": {"fail": same_fail, "total": same_total},
-        "dow_counts": {"fail": dow_fail, "total": dow_total},
-        "target_date": target_date.isoformat(),
-    }
-
-    return RiskResult(score=score, reasons=reasons, stats=stats, repeated_trigger=trig)
+    # 너무 길면 UX 안 좋으니 상위 4개만
+    return suggestions[:4]
