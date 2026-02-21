@@ -15,7 +15,7 @@ from failog.constants import (
 )
 from failog.consent import consent_value
 from failog.openai_helpers import effective_openai_key, effective_openai_model
-from failog.habits_tasks import get_tasks_range, get_all_failures
+from failog.db import get_tasks_range, get_all_failures
 from failog.dates import week_start, korean_dow
 from failog.pdf_report import failures_by_dow, ensure_korean_font_downloaded, build_weekly_pdf_bytes
 from failog.weather import geocode_city
