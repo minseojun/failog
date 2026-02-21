@@ -142,7 +142,6 @@ def screen_planner(user_id: str):
                 ck_set("failog_rem_win", str(int(w_ui)))
                 st.success("저장됐어요.")
 
-        # weather area also in border container to stay consistent
         with st.container(border=True):
             weather_card(selected)
 
@@ -158,128 +157,146 @@ def screen_planner(user_id: str):
                 unsafe_allow_html=True,
             )
 
-            # Plan add (FORM SUBMIT BUTTON now styled via CSS)
+            # -------------------------
+            # Plan add + Risk preview + Strategy apply
+            # -------------------------
             with st.form("plan_add_form", clear_on_submit=False):
-    c1, c2, c3 = st.columns([4, 1.2, 1.2])
-    with c1:
-        plan_text = st.text_input(
-            "계획 추가(1회성)",
-            placeholder="예: 독서 10분 / 이메일 정리",
-            key="plan_text_input",
-        )
-    with c2:
-        preview = st.form_submit_button("위험도 보기", use_container_width=True)
-    with c3:
-        submitted = st.form_submit_button("추가", use_container_width=True)
+                c1, c2, c3 = st.columns([4, 1.2, 1.2])
+                with c1:
+                    plan_text = st.text_input(
+                        "계획 추가(1회성)",
+                        placeholder="예: 독서 10분 / 이메일 정리",
+                        key="plan_text_input",
+                    )
+                with c2:
+                    preview = st.form_submit_button("위험도 보기", use_container_width=True)
+                with c3:
+                    submitted = st.form_submit_button("추가", use_container_width=True)
 
-# --- 위험도 프리뷰 ---
-if preview:
-    rr = risk_score_plan(user_id, selected, plan_text)
-    st.session_state["__plan_risk__"] = {
-        "text": plan_text,
-        "date": selected.isoformat(),
-        "score": rr.score,
-        "reasons": rr.reasons,
-        "stats": rr.stats,
-        "trigger": rr.repeated_trigger,
-    }
-
-if st.session_state.get("__plan_risk__"):
-    pr = st.session_state["__plan_risk__"]
-    # 입력이 바뀌면 프리뷰 무효화(혼동 방지)
-    if (pr.get("text") or "").strip() != (plan_text or "").strip() or pr.get("date") != selected.isoformat():
-        st.session_state.pop("__plan_risk__", None)
-    else:
-        st.markdown("---")
-        st.write(f"**위험도 점수: {pr['score']}/100**")
-        for r in pr.get("reasons", [])[:4]:
-            st.write(f"- {r}")
-
-        # 트리거/고위험이면 전략 제안
-        if pr["score"] >= 70 or pr.get("trigger"):
-            st.write("**추천 전략(바로 적용 가능)**")
-            strategies = suggest_strategies_for_plan(plan_text)
-
-            for i, s in enumerate(strategies, start=1):
-                with st.container(border=True):
-                    st.write(f"**{i}) {s.name}**")
-                    st.caption(s.description)
-                    st.write("저장될 항목:")
-                    for t in s.texts:
-                        st.write(f"- {t}")
-
-                    colA, colB = st.columns([1.2, 5])
-                    with colA:
-                        if st.button(f"이 전략으로 저장", key=f"apply_strategy_{i}", use_container_width=True):
-                            # Plan에만 적용: texts 1개면 1개 저장, 여러개면 여러개 저장
-                            from failog.habits_tasks import add_plan_task
-                            for t in s.texts:
-                                add_plan_task(user_id, selected, t)
-                            st.session_state.pop("__plan_risk__", None)
-                            st.success("전략을 적용해서 저장했어요.")
-                            st.rerun()
-
-        # (선택) AI 대안 버튼
-        if consent_value():
-            api_key = effective_openai_key()
-            model = effective_openai_model()
-            if api_key and st.button("AI로 대안 3개 더 받기", use_container_width=True, key="ai_alt_btn"):
-                ctx = {
-                    "plan_text": plan_text,
-                    "risk_score": pr["score"],
-                    "risk_reasons": pr.get("reasons", []),
-                    "recent_stats": pr.get("stats", {}),
+            # --- 위험도 프리뷰 ---
+            if preview:
+                rr = risk_score_plan(user_id, selected, plan_text)
+                st.session_state["__plan_risk__"] = {
+                    "text": plan_text,
+                    "date": selected.isoformat(),
+                    "score": int(rr.score),
+                    "reasons": rr.reasons,
+                    "stats": rr.stats,
+                    "trigger": bool(rr.repeated_trigger),
                 }
-                try:
-                    with st.spinner("AI 대안 생성 중..."):
-                        out = llm_plan_alternatives(api_key, model, ctx)
-                    st.session_state["__ai_plan_alt__"] = out
-                except Exception as e:
-                    st.error(f"AI 대안 생성 실패: {type(e).__name__}")
+                # 프리뷰 새로 만들면 AI 결과는 초기화
+                st.session_state.pop("__ai_plan_alt__", None)
 
-        if st.session_state.get("__ai_plan_alt__"):
-            out = st.session_state["__ai_plan_alt__"]
-            with st.container(border=True):
-                rw = (out.get("rewrite") or "").strip()
-                alts = out.get("alternatives") or []
-                ifs = out.get("if_then") or []
-                if rw:
-                    st.write("**AI rewrite(추천 1개)**")
-                    st.write(f"- {rw}")
-                    if st.button("Rewrite로 저장", use_container_width=True, key="save_ai_rewrite"):
-                        from failog.habits_tasks import add_plan_task
-                        add_plan_task(user_id, selected, rw)
-                        st.session_state.pop("__plan_risk__", None)
-                        st.session_state.pop("__ai_plan_alt__", None)
-                        st.success("Rewrite로 저장했어요.")
-                        st.rerun()
+            pr = st.session_state.get("__plan_risk__")
 
-                if alts:
-                    st.write("**AI 대안(3개)**")
-                    for j, t in enumerate(alts[:3], start=1):
-                        st.write(f"{j}. {t}")
-                        if st.button("이 대안으로 저장", key=f"save_ai_alt_{j}", use_container_width=True):
-                            from failog.habits_tasks import add_plan_task
-                            add_plan_task(user_id, selected, t)
-                            st.session_state.pop("__plan_risk__", None)
-                            st.session_state.pop("__ai_plan_alt__", None)
-                            st.success("대안으로 저장했어요.")
-                            st.rerun()
+            if pr:
+                # 입력이 바뀌면 프리뷰 무효화(혼동 방지)
+                if (pr.get("text") or "").strip() != (plan_text or "").strip() or pr.get("date") != selected.isoformat():
+                    st.session_state.pop("__plan_risk__", None)
+                    st.session_state.pop("__ai_plan_alt__", None)
+                    pr = None
 
-                if ifs:
-                    st.write("**If-Then 방어 플랜**")
-                    for t in ifs[:2]:
-                        st.write(f"- {t}")
+            if pr:
+                st.markdown("<hr/>", unsafe_allow_html=True)
+                st.write(f"**위험도 점수: {int(pr['score'])}/100**")
+                for r in (pr.get("reasons") or [])[:4]:
+                    st.write(f"- {r}")
 
-# --- 기존 그대로: 그냥 추가(원문 저장) ---
-if submitted:
-    from failog.habits_tasks import add_plan_task
-    add_plan_task(user_id, selected, plan_text)
-    st.session_state.pop("__plan_risk__", None)
-    st.session_state.pop("__ai_plan_alt__", None)
-    st.rerun()
+                # 트리거/고위험이면 전략 제안
+                if int(pr["score"]) >= 70 or bool(pr.get("trigger")):
+                    st.write("**추천 전략(바로 적용 가능)**")
+                    strategies = suggest_strategies_for_plan(plan_text)
 
-            # Habit manager (expander button is streamlit UI; ok)
+                    for i, s in enumerate(strategies, start=1):
+                        with st.container(border=True):
+                            st.write(f"**{i}) {s.name}**")
+                            st.caption(s.description)
+                            st.write("저장될 항목:")
+                            for t in s.texts:
+                                st.write(f"- {t}")
+
+                            if st.button(
+                                "이 전략으로 저장",
+                                key=f"apply_strategy_{selected.isoformat()}_{i}",
+                                use_container_width=True,
+                            ):
+                                for t in s.texts:
+                                    add_plan_task(user_id, selected, t)
+                                st.session_state.pop("__plan_risk__", None)
+                                st.session_state.pop("__ai_plan_alt__", None)
+                                st.success("전략을 적용해서 저장했어요.")
+                                st.rerun()
+
+                # (선택) AI 대안 버튼 (동의 + 키 있을 때만)
+                if consent_value():
+                    api_key = effective_openai_key()
+                    model = effective_openai_model()
+                    if api_key:
+                        if st.button("AI로 대안 3개 더 받기", use_container_width=True, key="ai_alt_btn"):
+                            ctx = {
+                                "plan_text": (plan_text or "").strip(),
+                                "risk_score": int(pr["score"]),
+                                "risk_reasons": pr.get("reasons", []),
+                                "recent_stats": pr.get("stats", {}),
+                            }
+                            try:
+                                with st.spinner("AI 대안 생성 중..."):
+                                    out = llm_plan_alternatives(api_key, model, ctx)
+                                st.session_state["__ai_plan_alt__"] = out
+                            except Exception as e:
+                                st.error(f"AI 대안 생성 실패: {type(e).__name__}")
+
+                out = st.session_state.get("__ai_plan_alt__")
+                if out:
+                    with st.container(border=True):
+                        rw = (out.get("rewrite") or "").strip()
+                        alts = out.get("alternatives") or []
+                        ifs = out.get("if_then") or []
+
+                        if rw:
+                            st.write("**AI rewrite(추천 1개)**")
+                            st.write(f"- {rw}")
+                            if st.button(
+                                "Rewrite로 저장",
+                                use_container_width=True,
+                                key=f"save_ai_rewrite_{selected.isoformat()}",
+                            ):
+                                add_plan_task(user_id, selected, rw)
+                                st.session_state.pop("__plan_risk__", None)
+                                st.session_state.pop("__ai_plan_alt__", None)
+                                st.success("Rewrite로 저장했어요.")
+                                st.rerun()
+
+                        if alts:
+                            st.write("**AI 대안(최대 3개)**")
+                            for j, t in enumerate(alts[:3], start=1):
+                                st.write(f"{j}. {t}")
+                                if st.button(
+                                    "이 대안으로 저장",
+                                    key=f"save_ai_alt_{selected.isoformat()}_{j}",
+                                    use_container_width=True,
+                                ):
+                                    add_plan_task(user_id, selected, t)
+                                    st.session_state.pop("__plan_risk__", None)
+                                    st.session_state.pop("__ai_plan_alt__", None)
+                                    st.success("대안으로 저장했어요.")
+                                    st.rerun()
+
+                        if ifs:
+                            st.write("**If-Then 방어 플랜**")
+                            for t in ifs[:2]:
+                                st.write(f"- {t}")
+
+            # --- 기존 그대로: 그냥 추가(원문 저장) ---
+            if submitted:
+                add_plan_task(user_id, selected, plan_text)
+                st.session_state.pop("__plan_risk__", None)
+                st.session_state.pop("__ai_plan_alt__", None)
+                st.rerun()
+
+            # -------------------------
+            # Habit manager
+            # -------------------------
             with st.expander("습관(반복) 관리", expanded=False):
                 with st.form("habit_add_form", clear_on_submit=True):
                     hc1, hc2 = st.columns([3, 2])
