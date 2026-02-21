@@ -1,23 +1,21 @@
+# failog/screens_planner.py
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Optional
 
 import streamlit as st
 
-# Optional autorefresh (same behavior as before)
+# Optional autorefresh
 try:
     from streamlit_autorefresh import st_autorefresh
 except Exception:
     st_autorefresh = None
 
-# ---- import your existing helpers (names must match your project) ----
-# 날짜/달력
-from failog.date_utils import week_start, month_grid, korean_dow
+from failog.constants import KST
+from failog.ui import inject_css
 
-# DB & tasks/habits
-from failog.habits_tasks import (
-    conn,
+from failog.date_utils import month_grid, korean_dow, week_start
+from failog.db import (
     add_plan_task,
     list_habits,
     add_habit,
@@ -29,52 +27,34 @@ from failog.habits_tasks import (
     update_task_fail,
     delete_task,
     count_today_todos,
+    get_habit_task_for_date,
 )
-
-# reminder prefs helpers (cookie-based)
 from failog.prefs import ck_get, ck_set
-
-# reminder logic (time parsing + window check)
 from failog.reminder import parse_hhmm, should_remind
-
-# weather card UI
 from failog.weather import weather_card
-
-# timezone
-from failog.constants import KST
 
 
 def screen_planner(user_id: str):
-    """
-    Planner screen (updated):
-    - Current Week selector removed (요구사항 #6)
-    - Month calendar becomes square grid, font size fixed to prevent wrapping (요구사항 #2)
-    - Habit manager now also allows success/fail/reason for selected date’s habit-task (요구사항 #5)
-    - (pills UI removal is handled by CSS in ui.py)
-    """
-    st.markdown("## Planner")
+    # Re-inject CSS with dynamic today/selected highlight rules
+    if "selected_date" not in st.session_state:
+        st.session_state["selected_date"] = date.today()
+    selected: date = st.session_state["selected_date"]
+    inject_css(today=date.today(), selected=selected)
 
-    # Optional auto-refresh (keeps your original behavior)
+    st.markdown("<div class='section-title tight'>Planner</div>", unsafe_allow_html=True)
+
     if st_autorefresh is not None:
         st_autorefresh(interval=60_000, key="auto_refresh_planner")
 
-    # Selected date state
-    if "selected_date" not in st.session_state:
-        st.session_state["selected_date"] = date.today()
-
-    selected: date = st.session_state["selected_date"]
     ws = week_start(selected)
-
-    # Make sure habit tasks for the selected week exist
     ensure_week_habit_tasks(user_id, ws)
 
     # -------------------------
-    # Reminder (same behavior)
+    # Reminder
     # -------------------------
     en = (ck_get("failog_rem_enabled", "true").lower() == "true")
     rt_str = ck_get("failog_rem_time", "21:30")
     win_str = ck_get("failog_rem_win", "15")
-
     remind_t = parse_hhmm(rt_str)
     try:
         win = int(win_str)
@@ -86,20 +66,17 @@ def screen_planner(user_id: str):
         if todos > 0:
             st.toast(f"⏰ 아직 체크하지 않은 항목이 {todos}개 있어요", icon="⏰")
 
-    # -------------------------
-    # Layout (Month | Day)
-    # -------------------------
-    left, right = st.columns([1.05, 1.95], gap="large")
+    # 넓히기: 달력 폭 문제 해결을 위해 left 비율을 키움
+    left, right = st.columns([1.35, 1.65], gap="large")
 
     # =========================
-    # LEFT: Month + prefs + weather
+    # LEFT: Month + reminder + weather
     # =========================
     with left:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("### Month")
+        st.markdown("<div class='section-title'>Month</div>", unsafe_allow_html=True)
 
         y, m = selected.year, selected.month
-
         nav = st.columns([1, 2, 1])
         with nav[0]:
             if st.button("◀", use_container_width=True, key="m_prev"):
@@ -110,13 +87,11 @@ def screen_planner(user_id: str):
                     m -= 1
                 st.session_state["selected_date"] = date(y, m, 1)
                 st.rerun()
-
         with nav[1]:
             st.markdown(
                 f"<div style='text-align:center; font-weight:900; font-size:1.05rem;'>{y}.{m:02d}</div>",
                 unsafe_allow_html=True,
             )
-
         with nav[2]:
             if st.button("▶", use_container_width=True, key="m_next"):
                 if m == 12:
@@ -127,7 +102,7 @@ def screen_planner(user_id: str):
                 st.session_state["selected_date"] = date(y, m, 1)
                 st.rerun()
 
-        # Weekday headers: square grid style (paired with CSS .cal-weekdays)
+        # Weekday header grid (우물정 느낌)
         st.markdown(
             "<div class='cal-weekdays'>"
             + "".join([f"<div>{k}</div>" for k in ["월", "화", "수", "목", "금", "토", "일"]])
@@ -135,42 +110,30 @@ def screen_planner(user_id: str):
             unsafe_allow_html=True,
         )
 
-        # Calendar grid wrapper (paired with CSS .cal-grid)
+        # Calendar grid (no gaps)
         st.markdown("<div class='cal-grid'>", unsafe_allow_html=True)
 
         grid = month_grid(y, m)
         today = date.today()
 
         for row in grid:
-            st.markdown("<div class='cal-row'>", unsafe_allow_html=True)
-            cols = st.columns(7, gap="small")
-
+            cols = st.columns(7, gap="small")  # gap은 CSS에서 0으로 덮어씀
             for i, d in enumerate(row):
                 if d is None:
-                    cols[i].markdown("<div style='height:34px;'></div>", unsafe_allow_html=True)
+                    # 빈 칸도 높이 맞춰서 그리드 유지
+                    cols[i].markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
                     continue
 
-                # IMPORTANT: keep label short to avoid wrapping like "2\n1"
-                label = str(d.day)
+                label = str(d.day)  # 줄바꿈 방지: 숫자만
 
-                # Optional: you can hint today/selected with emoji, but that can re-trigger wrapping.
-                # We'll keep it clean and rely on CSS + the right pane for context.
+                # key가 중요: CSS에서 st-key-cal_YYYY-MM-DD로 오늘/선택 하이라이트
                 if cols[i].button(label, key=f"cal_{d.isoformat()}", use_container_width=True):
                     st.session_state["selected_date"] = d
                     st.rerun()
 
-                # Tiny captions are safe (do not affect label wrapping)
-                if d == today:
-                    cols[i].caption("오늘")
-                elif d == selected:
-                    cols[i].caption("선택")
+        st.markdown("</div>", unsafe_allow_html=True)  # close cal-grid
+        st.markdown("</div>", unsafe_allow_html=True)  # close card
 
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)  # close .cal-grid
-        st.markdown("</div>", unsafe_allow_html=True)  # close .card
-
-        # Reminder settings (kept)
         with st.expander("알림 설정", expanded=False):
             en_ui = st.toggle("리마인더 켜기", value=en, key="rem_en_ui")
             t_ui = st.text_input("시간(HH:MM)", value=rt_str, key="rem_t_ui")
@@ -181,18 +144,23 @@ def screen_planner(user_id: str):
                 ck_set("failog_rem_win", str(int(w_ui)))
                 st.success("저장됐어요.")
 
+        # Weather (기능 유지)
         weather_card(selected)
 
     # =========================
-    # RIGHT: Selected Day (no Current Week selector)
+    # RIGHT: Selected Day tasks & habit manager
     # =========================
     with right:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-        # Day header
-        st.markdown(f"### {selected.isoformat()} ({korean_dow(selected.weekday())})")
+        st.markdown(
+            f"<div class='section-title'>"
+            f"{selected.isoformat()} ({korean_dow(selected.weekday())})"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
-        # 1) Add one-time plan task
+        # ---- Plan add (button style is now white+border via CSS) ----
         with st.form("plan_add_form", clear_on_submit=True):
             c1, c2 = st.columns([4, 1])
             with c1:
@@ -203,14 +171,12 @@ def screen_planner(user_id: str):
                 )
             with c2:
                 submitted = st.form_submit_button("추가", use_container_width=True)
-
             if submitted:
                 add_plan_task(user_id, selected, plan_text)
                 st.rerun()
 
-        # 2) Habit manager (repeat)
+        # ---- Habit manager ----
         with st.expander("습관(반복) 관리", expanded=False):
-            # Add habit
             with st.form("habit_add_form", clear_on_submit=True):
                 hc1, hc2 = st.columns([3, 2])
                 with hc1:
@@ -224,15 +190,14 @@ def screen_planner(user_id: str):
                         default=[0, 1, 2, 3, 4],
                         key="habit_dow_input",
                     )
-                habit_submit = st.form_submit_button("습관 저장", use_container_width=True)
 
+                habit_submit = st.form_submit_button("습관 저장", use_container_width=True)
                 if habit_submit:
                     add_habit(user_id, habit_title, picked)
                     ensure_week_habit_tasks(user_id, week_start(selected))
                     st.success("습관을 저장했어요.")
                     st.rerun()
 
-            # List habits
             hdf = list_habits(user_id, active_only=False)
             if hdf.empty:
                 st.markdown("<div class='small'>아직 습관이 없어요.</div>", unsafe_allow_html=True)
@@ -242,57 +207,42 @@ def screen_planner(user_id: str):
                     title = str(h["title"])
                     mask = str(h["dow_mask"] or "0000000")
                     active = int(h["active"]) == 1
-                    days_txt = " ".join([korean_dow(i) for i in range(7) if mask[i] == "1"]) or "—"
+                    days_txt = " ".join([korean_dow(i) for i in range(7) if len(mask) == 7 and mask[i] == "1"]) or "—"
 
-                    # Habit row header
-                    st.markdown("<div style='padding:8px 0; border-top:1px solid rgba(0,0,0,0.10);'></div>", unsafe_allow_html=True)
+                    st.markdown("<hr/>", unsafe_allow_html=True)
+                    st.markdown(f"**{title}**  ·  {days_txt}")
 
-                    a, b, c = st.columns([6, 1.2, 1.2], gap="small")
+                    a, b, c = st.columns([1, 1, 1], gap="small")
                     with a:
-                        st.write(f"**{title}**  ·  {days_txt}")
-                    with b:
                         if st.button("ON" if active else "OFF", key=f"hab_toggle_{hid}", use_container_width=True):
                             set_habit_active(user_id, hid, not active)
                             ensure_week_habit_tasks(user_id, week_start(selected))
                             st.rerun()
-                    with c:
+                    with b:
                         if st.button("삭제", key=f"hab_del_{hid}", use_container_width=True):
                             delete_habit(user_id, hid)
                             st.success("습관을 삭제했어요.")
                             st.rerun()
+                    with c:
+                        st.write("")  # layout align
 
-                    # ---- NEW: allow success/fail/reason for this habit on the selected date ----
-                    # Find today's habit-task row (if this habit applies on selected weekday and is generated)
-                    cdb = conn()
-                    row = cdb.execute(
-                        """
-                        SELECT id, status, COALESCE(fail_reason,'')
-                        FROM tasks
-                        WHERE user_id=? AND task_date=? AND source='habit' AND habit_id=?
-                        LIMIT 1
-                        """,
-                        (user_id, selected.isoformat(), hid),
-                    ).fetchone()
-                    cdb.close()
-
-                    if row:
-                        task_id = int(row[0])
-                        t_status = str(row[1])
-                        t_reason = str(row[2] or "")
-
-                        st.caption(f"{selected.isoformat()} 상태: {t_status}")
+                    # ---- Requirement #5: allow success/fail/reason for this habit on selected date ----
+                    info = get_habit_task_for_date(user_id, selected, hid)
+                    if info:
+                        task_id, t_status, t_reason = info
+                        st.caption(f"선택 날짜 상태: {t_status}")
 
                         x1, x2, x3 = st.columns([1, 1, 1], gap="small")
                         with x1:
-                            if st.button("성공", key=f"hab_s_{hid}_{task_id}", use_container_width=True):
+                            if st.button("성공", key=f"hab_s_{task_id}", use_container_width=True):
                                 update_task_status(user_id, task_id, "success")
                                 st.session_state.pop(f"hab_show_fail_{task_id}", None)
                                 st.rerun()
                         with x2:
-                            if st.button("실패", key=f"hab_f_{hid}_{task_id}", use_container_width=True):
+                            if st.button("실패", key=f"hab_f_{task_id}", use_container_width=True):
                                 st.session_state[f"hab_show_fail_{task_id}"] = True
                         with x3:
-                            if st.button("삭제", key=f"hab_del_task_{hid}_{task_id}", use_container_width=True):
+                            if st.button("삭제", key=f"hab_del_task_{task_id}", use_container_width=True):
                                 delete_task(user_id, task_id)
                                 st.session_state.pop(f"hab_show_fail_{task_id}", None)
                                 st.rerun()
@@ -310,11 +260,10 @@ def screen_planner(user_id: str):
                     else:
                         st.caption("이 날짜에는 이 습관이 생성되지 않아요. (선택한 요일이 아닐 수 있어요)")
 
-        # 3) Tasks list for the selected date (same as before)
-        df = list_tasks_for_date(user_id, selected)
-
         st.markdown("<hr/>", unsafe_allow_html=True)
 
+        # ---- Task list for selected date ----
+        df = list_tasks_for_date(user_id, selected)
         if df.empty:
             st.markdown("<div class='small'>아직 항목이 없어요.</div>", unsafe_allow_html=True)
         else:
@@ -331,9 +280,7 @@ def screen_planner(user_id: str):
                 st.markdown("<div class='task'>", unsafe_allow_html=True)
 
                 top = st.columns([6, 1.2, 1.2, 1.2], gap="small")
-
                 with top[0]:
-                    # pill은 CSS에서 제거됨. 텍스트만 남겨도 깔끔.
                     st.markdown(f"**{status_icon} {text}**  ({badge})")
                     if status == "fail" and reason.strip():
                         st.caption(f"실패 원인: {reason}")
@@ -367,4 +314,4 @@ def screen_planner(user_id: str):
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("</div>", unsafe_allow_html=True)  # close right card
+        st.markdown("</div>", unsafe_allow_html=True)  # close card
