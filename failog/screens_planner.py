@@ -169,7 +169,7 @@ def screen_planner(user_id: str):
                         key="plan_text_input",
                     )
                 with c2:
-                    preview = st.form_submit_button("위험도 보기", use_container_width=True)
+                    preview = st.form_submit_button("위험도", use_container_width=True)
                 with c3:
                     submitted = st.form_submit_button("추가", use_container_width=True)
 
