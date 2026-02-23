@@ -203,8 +203,6 @@ def screen_failures(user_id: str):
     # Weekly analysis / coaching
     # -------------------------
     with tab2:
-
-
         if not consent_value():
             st.info("AI 기능 사용 동의가 필요해요. (Planner 화면 하단에서 동의)")
             return
@@ -214,6 +212,7 @@ def screen_failures(user_id: str):
         if not api_key:
             st.info("OpenAI 키가 설정되면 분석/코칭이 표시돼요. (Planner 화면 하단 OpenAI 설정)")
             return
+            
  # --- 주간 1개 실험 (Behavioral Experiment) ---
         st.markdown("<hr/>", unsafe_allow_html=True)
         section_title("주간 1개 실험 (7일)")
@@ -277,6 +276,7 @@ def screen_failures(user_id: str):
                     st.caption(f"(debug) {exp.get('error')}")
         else:
             st.caption("버튼을 누르면 다음 7일 동안 적용할 ‘단 하나의 규칙’이 생성돼요.")
+            
         # --- 원인 주간 분석 (버튼 누르면 바로 생성/갱신) ---
         weekly_reasons = [r for r in fails["fail_reason"].fillna("").tolist() if str(r).strip()]
         if len(weekly_reasons) == 0:
