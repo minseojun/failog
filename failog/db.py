@@ -60,6 +60,34 @@ def init_db() -> None:
         """
     )
 
+        # Puzzle (progress)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS puzzle_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          image_key TEXT NOT NULL,
+          unlocked_mask TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          last_reward_date TEXT
+        );
+        """
+    )
+
+    # Puzzle collection (album)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS puzzle_collection (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          image_key TEXT NOT NULL,
+          completed_at TEXT NOT NULL,
+          UNIQUE(user_id, image_key)
+        );
+        """
+    )
+
     # Category map cache (per user) — keep as original
     cur.execute(
         """
