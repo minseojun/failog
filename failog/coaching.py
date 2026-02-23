@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -282,12 +282,6 @@ def llm_plan_alternatives(api_key: str, model: str, context: Dict[str, Any]) -> 
         m = re.search(r"\{.*\}", text, flags=re.DOTALL)
         return json.loads(m.group(0)) if m else {"rewrite": "", "alternatives": [], "if_then": []}
 
-
-# failog/coaching.py
-from __future__ import annotations
-
-import json
-from typing import Any, Dict, List, Optional
 
 
 def _safe_json_loads(s: str) -> Optional[Dict[str, Any]]:
