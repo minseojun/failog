@@ -1,5 +1,4 @@
-# failog/screens_failures.py (IMPORTS ONLY - replace the top imports with this)
-
+# failog/screens_failures.py
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -20,11 +19,11 @@ from failog.pdf_report import failures_by_dow, ensure_korean_font_downloaded, bu
 # Categorization
 from failog.categorization import get_or_build_category_map, weekly_category_trend
 
-# ✅ Consent / OpenAI prefs (여기서 가져와야 안전함)
-from failog.consent import consent_value  # 너 레포에 consent.py가 있으면 이걸로
-from failog.openai_prefs import effective_openai_key, effective_openai_model  # 너 레포에 이 파일이 있으면 이걸로
+# Consent / OpenAI prefs
+from failog.consent import consent_value
+from failog.openai_prefs import effective_openai_key, effective_openai_model
 
-# ✅ LLM functions (코칭/챗은 coaching.py에 남겨두는 게 자연스러움)
+# LLM functions
 from failog.coaching import llm_weekly_reason_analysis, llm_overall_coaching, llm_chat
 from failog.coaching import normalize_reason, repeated_reason_flags, compute_user_signals
 
@@ -37,11 +36,42 @@ try:
 except Exception:
     geocode_city = None
 
-# 기존 top_reasons/plot 등은 pdf_report에 있는 걸 사용하고, 여기선 화면 로직만 유지
-
 
 def screen_failures(user_id: str):
-    st.markdown("## Failure Report")
+    # ✅ 요청: "Failure Report" 큰 제목 삭제 -> st.markdown("## Failure Report") 제거
+
+    # ✅ failure report 화면에서만 추가 CSS 오버라이드:
+    # - 탭 아래 검정 라인 제거
+    # - 상단 날짜 네비(화살표/날짜박스) 더 작게 + 가운데 정렬 보장
+    st.markdown(
+        """
+<style>
+/* 탭 아래 길게 보이는 검정 라인 제거(이 화면에서만) */
+[data-testid="stTabs"] [data-baseweb="tab-border"] {
+  background: transparent !important;
+}
+
+/* 상단 주 이동 UI */
+.small-nav {
+  margin-top: 2px;
+  margin-bottom: 10px;
+}
+.date-box {
+  display: inline-block;
+  padding: 6px 10px;            /* ✅ 조금 더 작게 */
+  border: 1px solid rgba(17,17,17,0.55);
+  background: #f3f4f6;
+  font-weight: 900;
+  font-size: 0.98rem;           /* ✅ 조금 더 작게 */
+  line-height: 1.1;
+  text-align: center;           /* ✅ 날짜 중앙 */
+  width: 100%;                  /* ✅ column 안에서 정중앙 */
+  box-sizing: border-box;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
 
     if "fail_week_offset" not in st.session_state:
         st.session_state["fail_week_offset"] = 0
@@ -51,7 +81,7 @@ def screen_failures(user_id: str):
     ws = week_start(base)
     we = ws + timedelta(days=6)
 
-    # ✅ (요청1) 상단 주 이동 UI: 가운데 정렬 + 작게
+    # ✅ 상단 주 이동 UI: 날짜 가운데 정렬 + 박스/버튼 작게
     st.markdown("<div class='small-nav'>", unsafe_allow_html=True)
     nav = st.columns([1.1, 5.4, 1.1], gap="large")
     with nav[0]:
@@ -83,7 +113,7 @@ def screen_failures(user_id: str):
     # Dashboard
     # -------------------------
     with tab1:
-        # (요청2) 그래프 제목을 섹션타이틀로
+        # 그래프 제목을 섹션 타이틀로(연회색 박스 + 볼드)
         section_title("이번 주 실패(요일 분포)")
         dow_df = failures_by_dow(df)
         c_dow = (
@@ -171,8 +201,7 @@ def screen_failures(user_id: str):
     # Weekly analysis / coaching
     # -------------------------
     with tab2:
-        # (요청4) 여기 들어오면 있던 '원인 주간 분석' / '맞춤형 AI 코칭' 상단 텍스트(헤더) 삭제
-        # 대신 버튼/결과만 보여줌
+        # ✅ 요청: 여기 들어오면 있던 상단 텍스트(헤더) 제거 -> 따로 표기 안함(버튼/결과만)
 
         if not consent_value():
             st.info("AI 기능 사용 동의가 필요해요. (Planner 화면 하단에서 동의)")
@@ -308,13 +337,13 @@ def screen_failures(user_id: str):
     # PDF report
     # -------------------------
     with tab3:
-        # 빈화면 이슈 방지: 항상 타이틀/설명 먼저 출력
+        # 빈화면 이슈 방지: 항상 안내 먼저 출력
         st.caption("주간 PDF 리포트를 생성하고 다운로드할 수 있어요. (한글 폰트 포함)")
 
         city = ck_get("failog_city", "").strip()
         city_label = ""
         try:
-            if city:
+            if city and geocode_city is not None:
                 g = geocode_city(city)
                 if g:
                     city_label = f"{g.get('name','')} · {g.get('country','')}"
