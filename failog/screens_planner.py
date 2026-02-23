@@ -1,7 +1,7 @@
 # failog/screens_planner.py
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import streamlit as st
 
@@ -142,6 +142,7 @@ def screen_planner(user_id: str):
                 st.success("저장됐어요.")
 
         with st.container(border=True):
+            # weather_card 내부에서 제목 스타일을 네가 바꾸고 싶다면 weather.py쪽에서 section_title로 바꾸는 게 베스트
             weather_card(selected)
 
     # =========================
@@ -157,7 +158,7 @@ def screen_planner(user_id: str):
             )
 
             # -------------------------
-            # Plan add + Risk preview + Strategy apply
+            # Plan add + Risk preview + AI Rewrite only
             # -------------------------
             with st.form("plan_add_form", clear_on_submit=False):
                 c1, c2, c3 = st.columns([4, 1.2, 1.2])
@@ -175,13 +176,26 @@ def screen_planner(user_id: str):
             # --- 위험도 프리뷰 ---
             if preview:
                 rr = risk_score_plan(user_id, selected, plan_text)
+
+                # rr가 어떤 타입이든 안전하게 뽑기
+                score = int(getattr(rr, "score", 0) or 0)
+                reasons = getattr(rr, "reasons", []) or []
+                stats = getattr(rr, "stats", {}) or {}
+                repeated_trigger = bool(getattr(rr, "repeated_trigger", False))
+
+                # (선택) risk 모델이 제공하면 표시용으로 저장
+                ai_score = getattr(rr, "ai_score", None)
+                pattern_score = getattr(rr, "pattern_score", None)
+
                 st.session_state["__plan_risk__"] = {
-                    "text": plan_text,
+                    "text": (plan_text or "").strip(),
                     "date": selected.isoformat(),
-                    "score": int(rr.score),
-                    "reasons": rr.reasons,
-                    "stats": rr.stats,
-                    "trigger": bool(rr.repeated_trigger),
+                    "score": score,
+                    "reasons": reasons,
+                    "stats": stats,
+                    "trigger": repeated_trigger,
+                    "ai_score": ai_score,
+                    "pattern_score": pattern_score,
                 }
                 # 프리뷰 새로 만들면 AI 결과는 초기화
                 st.session_state.pop("__ai_plan_alt__", None)
@@ -195,44 +209,48 @@ def screen_planner(user_id: str):
                     st.session_state.pop("__ai_plan_alt__", None)
                     pr = None
 
+            # --- 프리뷰 표시 + AI Rewrite (only) ---
             if pr:
                 st.markdown("<hr/>", unsafe_allow_html=True)
-                st.write(f"**위험도 점수: {pr['score']}/100**")
-                
-                if pr.get("ai_score") is not None:
-                    st.caption(f"(AI 실행가능성 평가: {pr['ai_score']} / 패턴 기반: {pr['pattern_score']})")
+                st.write(f"**위험도 점수: {int(pr.get('score', 0))}/100**")
 
+                # 이유(최대 4개)
+                for r in (pr.get("reasons") or [])[:4]:
+                    st.write(f"- {r}")
 
+                # (있으면) AI/패턴 분해 표시
+                if pr.get("ai_score") is not None or pr.get("pattern_score") is not None:
+                    st.caption(
+                        f"(AI 실행가능성 평가: {pr.get('ai_score', '—')} / 패턴 기반: {pr.get('pattern_score', '—')})"
+                    )
 
-                # (선택) AI 대안 버튼 (동의 + 키 있을 때만)
+                # AI Rewrite 버튼 (동의 + 키 있을 때만)
                 if consent_value():
                     api_key = effective_openai_key()
                     model = effective_openai_model()
                     if api_key:
-                        if st.button("AI로 대안 3개 더 받기", use_container_width=True, key="ai_alt_btn"):
+                        if st.button("AI Rewrite 받기", use_container_width=True, key="ai_rewrite_btn"):
                             ctx = {
                                 "plan_text": (plan_text or "").strip(),
-                                "risk_score": int(pr["score"]),
+                                "risk_score": int(pr.get("score", 0)),
                                 "risk_reasons": pr.get("reasons", []),
                                 "recent_stats": pr.get("stats", {}),
                             }
                             try:
-                                with st.spinner("AI 대안 생성 중..."):
+                                with st.spinner("AI Rewrite 생성 중..."):
                                     out = llm_plan_alternatives(api_key, model, ctx)
                                 st.session_state["__ai_plan_alt__"] = out
                             except Exception as e:
-                                st.error(f"AI 대안 생성 실패: {type(e).__name__}")
+                                st.error(f"AI Rewrite 생성 실패: {type(e).__name__}")
 
                 out = st.session_state.get("__ai_plan_alt__")
                 if out:
-                    with st.container(border=True):
-                        rw = (out.get("rewrite") or "").strip()
-                        alts = out.get("alternatives") or []
-                        ifs = out.get("if_then") or []
-
-                        if rw:
-                            st.write("**AI rewrite(추천 1개)**")
+                    rw = (out.get("rewrite") or "").strip()
+                    if rw:
+                        with st.container(border=True):
+                            st.write("**AI Rewrite (추천)**")
                             st.write(f"- {rw}")
+
                             if st.button(
                                 "Rewrite로 저장",
                                 use_container_width=True,
@@ -243,26 +261,8 @@ def screen_planner(user_id: str):
                                 st.session_state.pop("__ai_plan_alt__", None)
                                 st.success("Rewrite로 저장했어요.")
                                 st.rerun()
-
-                        if alts:
-                            st.write("**AI 대안(최대 3개)**")
-                            for j, t in enumerate(alts[:3], start=1):
-                                st.write(f"{j}. {t}")
-                                if st.button(
-                                    "이 대안으로 저장",
-                                    key=f"save_ai_alt_{selected.isoformat()}_{j}",
-                                    use_container_width=True,
-                                ):
-                                    add_plan_task(user_id, selected, t)
-                                    st.session_state.pop("__plan_risk__", None)
-                                    st.session_state.pop("__ai_plan_alt__", None)
-                                    st.success("대안으로 저장했어요.")
-                                    st.rerun()
-
-                        if ifs:
-                            st.write("**If-Then 방어 플랜**")
-                            for t in ifs[:2]:
-                                st.write(f"- {t}")
+                    else:
+                        st.caption("AI Rewrite 결과가 비어 있어요. 다시 시도해 주세요.")
 
             # --- 기존 그대로: 그냥 추가(원문 저장) ---
             if submitted:
