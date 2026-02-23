@@ -215,8 +215,7 @@ def screen_failures(user_id: str):
             
  # --- 주간 1개 실험 (Behavioral Experiment) ---
         st.markdown("<hr/>", unsafe_allow_html=True)
-        section_title("주간 1개 실험 (7일)")
-
+        
         end4 = ws + timedelta(days=6)
         start4 = ws - timedelta(days=27)  # 4주(28일) 범위
         last4 = get_tasks_range(user_id, start4, end4)
@@ -249,7 +248,7 @@ def screen_failures(user_id: str):
 
         signals_28 = compute_user_signals(user_id, days=28)
 
-        if st.button("주간 실험 생성/갱신", use_container_width=True, key="weekly_exp_btn"):
+        if st.button("주간 실험", use_container_width=True, key="weekly_exp_btn"):
             try:
                 with st.spinner("주간 실험 설계 중..."):
                     exp = llm_weekly_experiment(
@@ -282,7 +281,7 @@ def screen_failures(user_id: str):
         if len(weekly_reasons) == 0:
             st.write("이번 주에는 실패 원인 입력이 아직 없어요.")
         else:
-            if st.button("원인 주간 분석 생성/갱신", use_container_width=True, key="weekly_analyze"):
+            if st.button("원인 주간 분석", use_container_width=True, key="weekly_analyze"):
                 try:
                     st.session_state["weekly_analysis"] = llm_weekly_reason_analysis(api_key, model, weekly_reasons)
                 except Exception as e:
@@ -322,7 +321,7 @@ def screen_failures(user_id: str):
             )
         signals = compute_user_signals(user_id, days=28)
 
-        if st.button("맞춤형 AI 코칭 생성/갱신", use_container_width=True, key="overall_coach_btn"):
+        if st.button("맞춤형 AI 코칭", use_container_width=True, key="overall_coach_btn"):
             try:
                 st.session_state["overall_coach"] = llm_overall_coaching(api_key, model, items, signals)
             except Exception as e:
