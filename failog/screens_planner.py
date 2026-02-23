@@ -204,7 +204,6 @@ def screen_planner(user_id: str):
                 st.write(f"**위험도 점수: {pr['score']}/100**")
                 reasons = [str(x).strip() for x in (pr.get("reasons") or []) if str(x).strip()]
                 if reasons:
-                    st.caption("위험도 판단 이유")
                     for reason in reasons[:2]:
                         st.write(f"- {reason}")
 
