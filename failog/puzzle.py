@@ -20,11 +20,8 @@ from failog.db import conn, now_iso
 GRID_N = 4  # 4x4 = 16
 TILE_COUNT = GRID_N * GRID_N
 
-# failog/puzzle.py 위치: /mount/src/failog/failog/puzzle.py
-# assets: /mount/src/failog/assets/animals
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ANIMALS_DIR = REPO_ROOT / "assets" / "animals"
-
 
 CATEGORIES: Dict[str, List[str]] = {
     "bunny": ["bunny1.jpeg", "bunny2.jpeg", "bunny3.jpeg", "bunny4.jpeg"],
@@ -32,6 +29,45 @@ CATEGORIES: Dict[str, List[str]] = {
     "puppy": ["puppy1.jpeg", "puppy2.jpeg", "puppy3.jpeg"],
     "seal": ["seal1.jpeg", "seal2.jpeg"],
 }
+
+
+# =========================================================
+# ✅ DB schema guard (핵심: 기존 DB에도 테이블 자동 생성)
+# =========================================================
+def ensure_puzzle_tables():
+    c = conn()
+    cur = c.cursor()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS puzzle_state (
+          user_id TEXT PRIMARY KEY,
+          category TEXT NOT NULL,
+          image_path TEXT NOT NULL,
+          seed INTEGER NOT NULL,
+          revealed_json TEXT NOT NULL,
+          last_award_date TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS puzzle_gallery (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          category TEXT NOT NULL,
+          image_path TEXT NOT NULL,
+          completed_at TEXT NOT NULL
+        );
+        """
+    )
+
+    c.commit()
+    c.close()
 
 
 # =========================================================
@@ -54,7 +90,7 @@ class PuzzleState:
 def _safe_int_list(x) -> List[int]:
     if not isinstance(x, list):
         return []
-    out = []
+    out: List[int] = []
     for v in x:
         try:
             iv = int(v)
@@ -62,9 +98,8 @@ def _safe_int_list(x) -> List[int]:
                 out.append(iv)
         except Exception:
             pass
-    # unique preserve
     seen = set()
-    uniq = []
+    uniq: List[int] = []
     for v in out:
         if v not in seen:
             uniq.append(v)
@@ -73,7 +108,6 @@ def _safe_int_list(x) -> List[int]:
 
 
 def _list_available_images(category: str) -> List[Path]:
-    # 폴더 구조가 assets/animals 안에 파일들이 "바로" 존재하는 전제
     if category not in CATEGORIES:
         return []
     paths = []
@@ -94,11 +128,9 @@ def _choose_random_image(category: str) -> Path:
 
 
 def _make_placeholder_png(size: Tuple[int, int]) -> bytes:
-    """연회색 단색 + 얇은 테두리 placeholder"""
     w, h = size
     img = Image.new("RGB", (w, h), (243, 244, 246))  # #f3f4f6
     draw = ImageDraw.Draw(img)
-    # border (thin)
     draw.rectangle([0, 0, w - 1, h - 1], outline=(17, 17, 17), width=1)
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -107,22 +139,15 @@ def _make_placeholder_png(size: Tuple[int, int]) -> bytes:
 
 @st.cache_data(show_spinner=False)
 def _tile_bytes_from_image(image_path_str: str, target_tile_px: int = 160) -> Tuple[List[bytes], bytes]:
-    """
-    원본 이미지를 4x4로 잘라 16개 타일 PNG bytes로 반환.
-    - 원본 미리보기는 화면에서 쓰지 않지만, 완성본/갤러리에 필요하면 쓸 수 있게 원본 bytes도 같이 반환.
-    캐시 키: image_path_str
-    """
     p = Path(image_path_str)
     im = Image.open(p).convert("RGB")
 
-    # 정사각형으로 중앙 크롭 후 리사이즈 (퍼즐이 예쁘게 맞게)
     w, h = im.size
     side = min(w, h)
     left = (w - side) // 2
     top = (h - side) // 2
     im_sq = im.crop((left, top, left + side, top + side))
 
-    # 전체 크기를 TILE_PX * GRID_N 로 맞추기
     full = target_tile_px * GRID_N
     im_sq = im_sq.resize((full, full))
 
@@ -132,7 +157,6 @@ def _tile_bytes_from_image(image_path_str: str, target_tile_px: int = 160) -> Tu
             x0 = c * target_tile_px
             y0 = r * target_tile_px
             tile = im_sq.crop((x0, y0, x0 + target_tile_px, y0 + target_tile_px))
-
             buf = BytesIO()
             tile.save(buf, format="PNG")
             tiles.append(buf.getvalue())
@@ -143,11 +167,6 @@ def _tile_bytes_from_image(image_path_str: str, target_tile_px: int = 160) -> Tu
 
 
 def _tasks_exist_today(user_id: str, d: date) -> bool:
-    """
-    '오늘 기록을 남겼다'를 DB에서 감지:
-    - 오늘 날짜(task_date)에 해당하는 항목 중
-      created_at 또는 updated_at이 오늘(YYYY-MM-DD)로 시작하면 기록이 있었다고 판단.
-    """
     day = d.isoformat()
     c = conn()
     row = c.execute(
@@ -172,6 +191,7 @@ def _tasks_exist_today(user_id: str, d: date) -> bool:
 # DB: load/save
 # =========================================================
 def load_state(user_id: str) -> Optional[PuzzleState]:
+    ensure_puzzle_tables()
     c = conn()
     row = c.execute(
         """
@@ -185,7 +205,6 @@ def load_state(user_id: str) -> Optional[PuzzleState]:
     if not row:
         return None
 
-    revealed = []
     try:
         revealed = _safe_int_list(json.loads(row[4] or "[]"))
     except Exception:
@@ -203,9 +222,11 @@ def load_state(user_id: str) -> Optional[PuzzleState]:
 
 
 def save_state(state: PuzzleState):
+    ensure_puzzle_tables()
     c = conn()
     now = now_iso()
     revealed_json = json.dumps(_safe_int_list(state.revealed), ensure_ascii=False)
+
     c.execute(
         """
         INSERT INTO puzzle_state
@@ -237,6 +258,7 @@ def save_state(state: PuzzleState):
 
 
 def add_to_gallery(user_id: str, category: str, image_path: str):
+    ensure_puzzle_tables()
     c = conn()
     c.execute(
         """
@@ -250,6 +272,7 @@ def add_to_gallery(user_id: str, category: str, image_path: str):
 
 
 def load_gallery(user_id: str) -> List[Dict[str, str]]:
+    ensure_puzzle_tables()
     c = conn()
     rows = c.execute(
         """
@@ -271,12 +294,7 @@ def load_gallery(user_id: str) -> List[Dict[str, str]]:
 # Puzzle operations
 # =========================================================
 def start_new_puzzle(user_id: str, category: str) -> PuzzleState:
-    """
-    카테고리를 고르면 이미지가 랜덤으로 결정되고,
-    revealed는 비어있는 상태로 시작(원본 미리보기 없음).
-    """
     img = _choose_random_image(category)
-    # seed: 유저/이미지 기반 + 랜덤성
     seed = random.randint(1, 2_000_000_000)
     stt = PuzzleState(
         user_id=user_id,
@@ -295,32 +313,25 @@ def _pick_next_piece(state: PuzzleState) -> Optional[int]:
     remaining = [i for i in range(TILE_COUNT) if i not in set(state.revealed)]
     if not remaining:
         return None
-    # 랜덤 순서 공개: 완전 랜덤(매번 award 시 랜덤 선택)
     return random.SystemRandom().choice(remaining)
 
 
 def award_piece_if_eligible(user_id: str, d: date) -> Tuple[bool, Optional[int], Optional[str]]:
-    """
-    Planner에서 자동 호출하는 함수.
-    - 오늘 기록이 있으면(생성/업데이트) 하루에 1번만 조각 지급.
-    returns: (awarded?, piece_index, message)
-    """
-    # 오늘 기록이 없으면 지급 X
+    ensure_puzzle_tables()
+
     if not _tasks_exist_today(user_id, d):
         return (False, None, None)
 
     state = load_state(user_id)
     if state is None:
-        # 퍼즐을 아직 시작 안 했으면 지급할 수 없으니 안내만
         return (False, None, "🧩 퍼즐을 먼저 시작해 주세요. (상단 🧩 메뉴)")
 
-    # 이미 완료한 퍼즐이면 더 이상 지급 안 함
     if state.completed_at:
         return (False, None, None)
 
     today_str = d.isoformat()
     if state.last_award_date == today_str:
-        return (False, None, None)  # 이미 오늘 지급함
+        return (False, None, None)
 
     piece = _pick_next_piece(state)
     if piece is None:
@@ -330,7 +341,6 @@ def award_piece_if_eligible(user_id: str, d: date) -> Tuple[bool, Optional[int],
     state.revealed = _safe_int_list(state.revealed)
     state.last_award_date = today_str
 
-    # 완료 체크
     if len(state.revealed) >= TILE_COUNT:
         state.completed_at = now_iso()
         save_state(state)
@@ -342,20 +352,11 @@ def award_piece_if_eligible(user_id: str, d: date) -> Tuple[bool, Optional[int],
 
 
 def get_render_payload(user_id: str) -> Dict[str, object]:
-    """
-    화면 렌더에 필요한 데이터 묶어서 반환.
-    """
-    state = load_state(user_id)
-    payload: Dict[str, object] = {
-        "state": state,
-        "gallery": load_gallery(user_id),
-    }
-    return payload
+    return {"state": load_state(user_id), "gallery": load_gallery(user_id)}
 
 
 def build_tiles_for_state(state: PuzzleState, tile_px: int = 170) -> Tuple[List[bytes], bytes]:
-    tiles, full = _tile_bytes_from_image(state.image_path, target_tile_px=tile_px)
-    return tiles, full
+    return _tile_bytes_from_image(state.image_path, target_tile_px=tile_px)
 
 
 def placeholder_tile(tile_px: int = 170) -> bytes:
