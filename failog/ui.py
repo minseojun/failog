@@ -317,7 +317,7 @@ def render_hero():
 <div class="failog-hero">
   <div class="hero-left">
     <div class="failog-title">FAILOG</div>
-    <div class="failog-sub">실패를 성공으로 — 계획과 습관의 실패를 기록하고, 패턴을 이해하고, 다음 주를 설계해요.</div>
+    <div class="failog-sub">실패를 성공으로 — 계획과 습관의 실패를 기록하고, 패턴을 이해하고, 미래를 설계해요.</div>
   </div>
   {gif_html}
 </div>
