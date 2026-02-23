@@ -316,19 +316,52 @@ def try_award_piece(user_id: str) -> Tuple[bool, str]:
     return True, "🧩 퍼즐 조각 1개가 공개됐어요!"
 
 
-def load_gallery(user_id: str) -> List[dict]:
+def load_gallery(user_id: str):
+    """
+    보관함(완성 이미지) 목록 조회.
+    스키마가 없거나/다르면 먼저 생성/보정 후 조회한다.
+    """
+    ensure_puzzle_schema()
+
     c = conn()
-    rows = c.execute(
-        """
-        SELECT category, image_file, completed_at
-        FROM puzzle_gallery
-        WHERE user_id=?
-        ORDER BY id DESC
-        """,
-        (user_id,),
-    ).fetchall()
-    c.close()
-    return [{"category": r[0], "image_file": r[1], "completed_at": r[2]} for r in rows]
+    try:
+        rows = c.execute(
+            """
+            SELECT category, image_path, created_at
+            FROM puzzle_gallery
+            WHERE user_id=?
+            ORDER BY id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # 혹시라도 테이블/컬럼 문제면 한 번 더 스키마 보정 후 재시도
+        c.close()
+        ensure_puzzle_schema()
+        c = conn()
+        rows = c.execute(
+            """
+            SELECT category, image_path, created_at
+            FROM puzzle_gallery
+            WHERE user_id=?
+            ORDER BY id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    finally:
+        c.close()
+
+    # 화면에서 쓰기 쉬운 형태로 변환
+    out = []
+    for cat, path, created_at in rows:
+        out.append(
+            {
+                "category": str(cat or ""),
+                "image_path": str(path or ""),
+                "created_at": str(created_at or ""),
+            }
+        )
+    return out
 
 def award_piece_if_eligible(user_id: str):
     """
