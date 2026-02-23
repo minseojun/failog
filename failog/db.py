@@ -64,23 +64,25 @@ def init_db():
         """
     )
 
-    # ✅ 퍼즐 상태 테이블: 유저당 1개의 진행 퍼즐을 가정(원하면 여러개로 확장 가능)
+    # =========================================================
+    # 🧩 PUZZLE TABLES (없으면 보관함/상태 로드에서 터짐)
+    # =========================================================
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS puzzle_state (
           user_id TEXT PRIMARY KEY,
           category TEXT NOT NULL,
           image_path TEXT NOT NULL,
-          reveal_order TEXT NOT NULL,   -- JSON list[int] length 16
-          revealed_mask TEXT NOT NULL,  -- "0100..." length 16
-          last_award_date TEXT,         -- "YYYY-MM-DD"
+          seed INTEGER NOT NULL,
+          revealed_json TEXT NOT NULL,
+          last_award_date TEXT,
           created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
+          updated_at TEXT NOT NULL,
+          completed_at TEXT
         );
         """
     )
 
-    # ✅ 완성본 보관함(갤러리)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS puzzle_gallery (
@@ -88,8 +90,7 @@ def init_db():
           user_id TEXT NOT NULL,
           category TEXT NOT NULL,
           image_path TEXT NOT NULL,
-          completed_on TEXT NOT NULL,  -- "YYYY-MM-DD"
-          created_at TEXT NOT NULL
+          completed_at TEXT NOT NULL
         );
         """
     )
