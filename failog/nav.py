@@ -19,11 +19,11 @@ def top_nav() -> str:
     c1, c2, c3, c4 = st.columns([1.2, 1.6, 1.0, 6.2], gap="small")
 
     with c1:
-        if st.button("🗓️ Planner", use_container_width=True, key="nav_planner"):
+        if st.button("Planner", use_container_width=True, key="nav_planner"):
             st.session_state["nav_screen"] = "planner"
 
     with c2:
-        if st.button("📊 Failure Report", use_container_width=True, key="nav_failures"):
+        if st.button("Failure Report", use_container_width=True, key="nav_failures"):
             st.session_state["nav_screen"] = "failures"
 
     # ✅ 퍼즐: 메인메뉴 옆에 "퍼즐 이모지"로
