@@ -18,7 +18,7 @@ from failog.puzzle import (
 
 
 def screen_puzzle(user_id: str):
-    section_title("🧩 퍼즐")
+   
 
     # (중요) 퍼즐 화면에서도 한 번 호출해두면, 사용자가 Planner에서 기록하고
     # 바로 🧩로 넘어왔을 때도 지급 메시지를 볼 수 있음
