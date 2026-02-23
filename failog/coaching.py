@@ -281,3 +281,147 @@ def llm_plan_alternatives(api_key: str, model: str, context: Dict[str, Any]) -> 
     except json.JSONDecodeError:
         m = re.search(r"\{.*\}", text, flags=re.DOTALL)
         return json.loads(m.group(0)) if m else {"rewrite": "", "alternatives": [], "if_then": []}
+
+
+# failog/coaching.py
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List, Optional
+
+
+def _safe_json_loads(s: str) -> Optional[Dict[str, Any]]:
+    """LLM이 JSON 외 텍스트를 섞어도 최대한 JSON만 추출해서 파싱."""
+    if not s:
+        return None
+    s = s.strip()
+
+    # 이미 JSON처럼 보이면 그대로 시도
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    # 앞/뒤 잡문 제거: 첫 '{' ~ 마지막 '}' 사이만 추출
+    try:
+        i = s.find("{")
+        j = s.rfind("}")
+        if i != -1 and j != -1 and j > i:
+            sub = s[i : j + 1]
+            obj = json.loads(sub)
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        return None
+
+    return None
+
+
+def llm_weekly_experiment(
+    api_key: str,
+    model: str,
+    failure_summary: Dict[str, Any],
+    top_patterns: List[Dict[str, Any]],
+    signals: Dict[str, Any],
+    recent_fail_texts: List[str],
+) -> Dict[str, Any]:
+    """
+    "주간 1개 실험" 생성기.
+    - 반드시 JSON만 반환하도록 강제
+    - 파싱 실패 시에도 안전한 fallback 반환
+    """
+    # ✅ 너가 유저 메시지로 준 프롬프트를 그대로 시스템 컨텍스트로 사용
+    system_prompt = f"""
+You are a behavioral design AI.
+
+Your task is to design ONE weekly experiment to reduce the user's recurring failure pattern.
+
+Context:
+- Recent failure summary (last 4 weeks):
+{json.dumps(failure_summary, ensure_ascii=False)}
+
+- Top recurring failure patterns:
+{json.dumps(top_patterns, ensure_ascii=False)}
+
+- Behavioral signals:
+{json.dumps(signals, ensure_ascii=False)}
+
+- Recent failure examples (raw texts):
+{json.dumps(recent_fail_texts, ensure_ascii=False)}
+
+Instructions:
+
+1. Identify the single most dominant behavioral pattern.
+2. Design exactly ONE experiment for the next 7 days.
+3. The experiment must:
+   - Be specific and immediately actionable
+   - Be measurable with a clear metric
+   - Reduce friction rather than increase workload
+   - Focus on limiting, simplifying, or restructuring behavior
+   - Not include motivational language
+   - Not include multiple suggestions
+
+4. The experiment rule must follow ONE of these formats:
+   - Time restriction (e.g., "No new tasks after 9 PM")
+   - Quantity limit (e.g., "Maximum 3 tasks per day")
+   - If-Then trigger (e.g., "If task takes >30 min, break into 10-min blocks")
+   - Environmental change (e.g., "Work only at library for deep tasks")
+
+Return ONLY valid JSON in the following format:
+
+{{
+  "dominant_pattern": "",
+  "experiment_rule": "",
+  "measurement_metric": "",
+  "expected_behavioral_shift": ""
+}}
+""".strip()
+
+    # ✅ llm_chat이 이미 레포에서 사용 중이므로, 같은 호출 경로를 재사용
+    # llm_chat(api_key, model, system_context, messages) 가 있다고 가정
+    try:
+        text = llm_chat(
+            api_key,
+            model,
+            system_prompt,
+            [{"role": "user", "content": "Generate the JSON now."}],
+        )
+    except Exception as e:
+        # 호출 자체 실패
+        return {
+            "dominant_pattern": "unknown",
+            "experiment_rule": "",
+            "measurement_metric": "",
+            "expected_behavioral_shift": "",
+            "error": f"OpenAI call failed: {type(e).__name__}",
+        }
+
+    obj = _safe_json_loads(str(text))
+    if not obj:
+        return {
+            "dominant_pattern": "unknown",
+            "experiment_rule": "",
+            "measurement_metric": "",
+            "expected_behavioral_shift": "",
+            "error": "JSON parse failed",
+            "raw": str(text)[:4000],
+        }
+
+    # ✅ 키 보정/검증: 누락되면 빈 문자열로 채움(화면에서 오류 방지)
+    out = {
+        "dominant_pattern": str(obj.get("dominant_pattern", "") or "").strip(),
+        "experiment_rule": str(obj.get("experiment_rule", "") or "").strip(),
+        "measurement_metric": str(obj.get("measurement_metric", "") or "").strip(),
+        "expected_behavioral_shift": str(obj.get("expected_behavioral_shift", "") or "").strip(),
+    }
+
+    # 최소 방어: experiment_rule이 비어 있으면 fallback
+    if not out["experiment_rule"]:
+        out["dominant_pattern"] = out["dominant_pattern"] or "unknown"
+        out["experiment_rule"] = "Maximum 3 tasks per day"
+        out["measurement_metric"] = "Days (out of 7) where tasks added <= 3"
+        out["expected_behavioral_shift"] = "Reduce over-commitment by limiting daily task intake"
+
+    return out
