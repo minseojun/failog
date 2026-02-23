@@ -261,6 +261,19 @@ hr {{
   box-shadow: inset -1px -1px 0 0 #111111;
 }}
 
+/* ===== Planner: 성공/실패/삭제 액션 버튼을 더 작게 ===== */
+div[class*="st-key-s_"] button,
+div[class*="st-key-f_"] button,
+div[class*="st-key-del_"] button,
+div[class*="st-key-hab_s_"] button,
+div[class*="st-key-hab_f_"] button,
+div[class*="st-key-hab_del_task_"] button {{
+  font-size: 0.82rem !important;
+  padding: 0.28rem 0.4rem !important;
+  min-height: 32px !important;
+  font-weight: 700 !important;
+}}
+
 /* Hero */
 .failog-hero {{
   border: 1px solid #111111;
