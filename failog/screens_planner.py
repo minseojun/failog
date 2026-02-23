@@ -33,7 +33,6 @@ from failog.reminder import parse_hhmm, should_remind
 from failog.weather import weather_card
 
 from failog.risk import risk_score_plan
-from failog.strategy import suggest_strategies_for_plan
 
 from failog.consent import consent_value
 from failog.openai_prefs import effective_openai_key, effective_openai_model
@@ -203,30 +202,7 @@ def screen_planner(user_id: str):
                 if pr.get("ai_score") is not None:
                     st.caption(f"(AI 실행가능성 평가: {pr['ai_score']} / 패턴 기반: {pr['pattern_score']})")
 
-                # 트리거/고위험이면 전략 제안
-                if int(pr["score"]) >= 70 or bool(pr.get("trigger")):
-                    st.write("**추천 전략(바로 적용 가능)**")
-                    strategies = suggest_strategies_for_plan(plan_text)
 
-                    for i, s in enumerate(strategies, start=1):
-                        with st.container(border=True):
-                            st.write(f"**{i}) {s.name}**")
-                            st.caption(s.description)
-                            st.write("저장될 항목:")
-                            for t in s.texts:
-                                st.write(f"- {t}")
-
-                            if st.button(
-                                "이 전략으로 저장",
-                                key=f"apply_strategy_{selected.isoformat()}_{i}",
-                                use_container_width=True,
-                            ):
-                                for t in s.texts:
-                                    add_plan_task(user_id, selected, t)
-                                st.session_state.pop("__plan_risk__", None)
-                                st.session_state.pop("__ai_plan_alt__", None)
-                                st.success("전략을 적용해서 저장했어요.")
-                                st.rerun()
 
                 # (선택) AI 대안 버튼 (동의 + 키 있을 때만)
                 if consent_value():
