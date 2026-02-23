@@ -5,183 +5,274 @@ import json
 import os
 import random
 from dataclasses import dataclass
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+from typing import List, Optional, Tuple
 
-from failog.prefs import ck_get, ck_set
+from PIL import Image
+
+from failog.constants import KST
+from failog.db import conn, now_iso
 
 
-ASSETS_DIR = os.path.join("assets", "animals")
+# ✅ Streamlit Cloud에서도 안전한 절대경로
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ASSETS_DIR = os.path.join(BASE_DIR, "assets", "animals")
+
 CATEGORIES = ["bunny", "guinea", "puppy", "seal"]
+
+CATEGORY_FILES = {
+    "bunny": ["bunny1.jpeg", "bunny2.jpeg", "bunny3.jpeg", "bunny4.jpeg"],
+    "guinea": ["guinea1.jpeg", "guinea2.jpeg", "guinea3.jpeg"],
+    "puppy": ["puppy1.jpeg", "puppy2.jpeg", "puppy3.jpeg"],
+    "seal": ["seal1.jpeg", "seal2.jpeg"],
+}
 
 
 @dataclass
 class PuzzleState:
+    user_id: str
     category: str
     image_path: str
-    progress: int  # 0..16
-    reveal_order: list[int]  # permutation of 0..15
-    last_award_date: str  # ISO date string, '' if never
-    completed: bool = False
+    reveal_order: List[int]      # length 16
+    revealed_mask: str           # length 16, '0'/'1'
+    last_award_date: Optional[str]
 
 
-def _key(user_id: str) -> str:
-    return f"failog_puzzle_state__{user_id}"
+def _today_kst() -> date:
+    return datetime.now(KST).date()
 
 
-def _collection_key(user_id: str) -> str:
-    return f"failog_puzzle_collection__{user_id}"
+def _mask_count(mask: str) -> int:
+    return sum(1 for ch in (mask or "") if ch == "1")
 
 
-def list_images(category: str) -> list[str]:
+def _all_assets_exist(category: str) -> List[str]:
+    files = CATEGORY_FILES.get(category, [])
+    paths = []
+    for fn in files:
+        p = os.path.join(ASSETS_DIR, category, fn)
+        paths.append(p)
+    return paths
+
+
+def pick_random_image_path(user_id: str, category: str) -> str:
     """
-    assets/animals 안에서 {category}{n}.jpeg 같은 파일을 찾는다.
+    카테고리만 고르면 '이미지는 랜덤' 요구 반영.
+    단, 유저별로 너무 자주 바뀌면 혼란스러우니:
+    - 퍼즐 시작 시점에만 랜덤 픽하고 DB에 고정 저장.
     """
-    if category not in CATEGORIES:
-        return []
+    paths = _all_assets_exist(category)
+    existing = [p for p in paths if os.path.exists(p)]
+    if not existing:
+        raise FileNotFoundError(
+            f"assets/animals/{category} 에 이미지가 없어요. "
+            f"경로를 확인: {os.path.join(ASSETS_DIR, category)}"
+        )
 
-    if not os.path.isdir(ASSETS_DIR):
-        return []
-
-    files = []
-    for fn in os.listdir(ASSETS_DIR):
-        low = fn.lower()
-        if not low.endswith((".jpg", ".jpeg", ".png", ".webp")):
-            continue
-        if low.startswith(category.lower()):
-            files.append(os.path.join(ASSETS_DIR, fn))
-
-    files.sort()
-    return files
+    # 유저별 랜덤 안정화(같은 유저는 같은 카테고리 선택 시 비슷하게 랜덤이 나옴)
+    seed = abs(hash(f"{user_id}:{category}:image")) % (2**31 - 1)
+    rng = random.Random(seed)
+    return rng.choice(existing)
 
 
-def _stable_shuffle_order(seed_text: str) -> list[int]:
-    """
-    랜덤 공개 순서지만, 같은 이미지면 항상 같은 랜덤 순서가 나오게(고정 랜덤).
-    """
-    r = random.Random(seed_text)
+def create_new_puzzle(user_id: str, category: str) -> PuzzleState:
+    image_path = pick_random_image_path(user_id, category)
+
+    # ✅ 공개 순서 랜덤(사용자가 원한 “랜덤 순서로 공개”)
+    seed = abs(hash(f"{user_id}:{category}:{image_path}:order")) % (2**31 - 1)
+    rng = random.Random(seed)
     order = list(range(16))
-    r.shuffle(order)
-    return order
+    rng.shuffle(order)
 
+    mask = "0" * 16
+    today = _today_kst().isoformat()
+    ts = now_iso()
 
-def load_state(user_id: str) -> PuzzleState | None:
-    raw = ck_get(_key(user_id), "")
-    if not raw:
-        return None
-    try:
-        obj = json.loads(raw)
-        return PuzzleState(
-            category=str(obj.get("category") or ""),
-            image_path=str(obj.get("image_path") or ""),
-            progress=int(obj.get("progress") or 0),
-            reveal_order=list(obj.get("reveal_order") or list(range(16))),
-            last_award_date=str(obj.get("last_award_date") or ""),
-            completed=bool(obj.get("completed") or False),
-        )
-    except Exception:
-        return None
+    c = conn()
+    cur = c.cursor()
+    cur.execute(
+        """
+        INSERT OR REPLACE INTO puzzle_state
+        (user_id, category, image_path, reveal_order, revealed_mask, last_award_date, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """,
+        (user_id, category, image_path, json.dumps(order), mask, None, ts, ts),
+    )
+    c.commit()
+    c.close()
 
-
-def save_state(user_id: str, stt: PuzzleState) -> None:
-    obj: dict[str, Any] = {
-        "category": stt.category,
-        "image_path": stt.image_path,
-        "progress": int(max(0, min(16, stt.progress))),
-        "reveal_order": stt.reveal_order,
-        "last_award_date": stt.last_award_date or "",
-        "completed": bool(stt.completed),
-    }
-    ck_set(_key(user_id), json.dumps(obj, ensure_ascii=False))
-
-
-def start_new_puzzle(user_id: str, category: str) -> PuzzleState:
-    imgs = list_images(category)
-    if not imgs:
-        # 비어있으면 안전하게 더미 상태 반환 (화면에서 에러 메시지 처리)
-        stt = PuzzleState(
-            category=category,
-            image_path="",
-            progress=0,
-            reveal_order=list(range(16)),
-            last_award_date="",
-            completed=False,
-        )
-        save_state(user_id, stt)
-        return stt
-
-    image_path = random.choice(imgs)
-    order = _stable_shuffle_order(os.path.basename(image_path))
-    stt = PuzzleState(
+    return PuzzleState(
+        user_id=user_id,
         category=category,
         image_path=image_path,
-        progress=0,
         reveal_order=order,
-        last_award_date="",
-        completed=False,
+        revealed_mask=mask,
+        last_award_date=None,
     )
-    save_state(user_id, stt)
-    return stt
 
 
-def load_or_init(user_id: str, category_if_new: str = "bunny") -> PuzzleState:
-    stt = load_state(user_id)
-    if stt is None:
-        return start_new_puzzle(user_id, category_if_new)
-    return stt
+def load_puzzle_state(user_id: str) -> Optional[PuzzleState]:
+    c = conn()
+    cur = c.cursor()
+    cur.execute(
+        """
+        SELECT user_id, category, image_path, reveal_order, revealed_mask, last_award_date
+        FROM puzzle_state
+        WHERE user_id = ?;
+        """,
+        (user_id,),
+    )
+    row = cur.fetchone()
+    c.close()
+
+    if not row:
+        return None
+
+    order = json.loads(row[3]) if row[3] else list(range(16))
+    mask = row[4] or ("0" * 16)
+    return PuzzleState(
+        user_id=row[0],
+        category=row[1],
+        image_path=row[2],
+        reveal_order=order,
+        revealed_mask=mask,
+        last_award_date=row[5],
+    )
 
 
-def _add_to_collection_if_new(user_id: str, image_path: str) -> None:
-    raw = ck_get(_collection_key(user_id), "[]")
-    try:
-        arr = json.loads(raw)
-        if not isinstance(arr, list):
-            arr = []
-    except Exception:
-        arr = []
-
-    if image_path and image_path not in arr:
-        arr.append(image_path)
-        ck_set(_collection_key(user_id), json.dumps(arr, ensure_ascii=False))
-
-
-def load_collection(user_id: str) -> list[str]:
-    raw = ck_get(_collection_key(user_id), "[]")
-    try:
-        arr = json.loads(raw)
-        if isinstance(arr, list):
-            return [str(x) for x in arr if str(x)]
-        return []
-    except Exception:
-        return []
+def _save_state(ps: PuzzleState):
+    ts = now_iso()
+    c = conn()
+    cur = c.cursor()
+    cur.execute(
+        """
+        UPDATE puzzle_state
+        SET revealed_mask = ?, last_award_date = ?, updated_at = ?
+        WHERE user_id = ?;
+        """,
+        (ps.revealed_mask, ps.last_award_date, ts, ps.user_id),
+    )
+    c.commit()
+    c.close()
 
 
-def award_piece_if_needed(user_id: str) -> tuple[bool, str]:
+def user_has_any_record_on_date(user_id: str, d: date) -> bool:
     """
-    planner에서 기록 이벤트 발생 시 호출.
-    - 하루 1회만 지급
-    - 진행 중 퍼즐이 있을 때만 지급
+    ✅ “오늘 기록을 남기면 자동 지급” 판단 기준.
+    - 가장 단단한 기준: tasks 테이블에 해당 날짜 row가 1개라도 있으면 기록한 것
+      (plan 추가든 habit 생성이든 status 변경이든 결국 tasks가 생김)
     """
-    stt = load_state(user_id)
-    if stt is None:
-        return (False, "no_puzzle")
+    iso = d.isoformat()
+    c = conn()
+    cur = c.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(1)
+        FROM tasks
+        WHERE user_id = ?
+          AND task_date = ?
+        """,
+        (user_id, iso),
+    )
+    n = int(cur.fetchone()[0] or 0)
+    c.close()
+    return n > 0
 
-    if not stt.image_path:
-        return (False, "no_image")
 
-    if stt.progress >= 16 or stt.completed:
-        return (False, "already_completed")
+def award_piece_if_eligible(user_id: str, d: Optional[date] = None) -> Tuple[bool, str]:
+    """
+    ✅ 하루 1번, 오늘 기록이 있으면 퍼즐 조각 1개 자동 공개.
+    Returns: (awarded?, message)
+    """
+    d = d or _today_kst()
+    today_iso = d.isoformat()
 
-    today = date.today().isoformat()
-    if stt.last_award_date == today:
-        return (False, "already_awarded_today")
+    ps = load_puzzle_state(user_id)
+    if not ps:
+        return (False, "퍼즐이 아직 시작되지 않았어요. (카테고리를 먼저 선택)")
 
-    stt.progress = min(16, stt.progress + 1)
-    stt.last_award_date = today
+    # 이미 완료면 아무것도 안함
+    if _mask_count(ps.revealed_mask) >= 16:
+        return (False, "이미 퍼즐이 완성됐어요.")
 
-    if stt.progress >= 16:
-        stt.completed = True
-        _add_to_collection_if_new(user_id, stt.image_path)
+    # 오늘 기록이 없으면 지급 안함
+    if not user_has_any_record_on_date(user_id, d):
+        return (False, "오늘 기록이 아직 없어서 조각을 지급하지 않았어요.")
 
-    save_state(user_id, stt)
-    return (True, "awarded")
+    # 오늘 이미 지급했으면 지급 안함
+    if ps.last_award_date == today_iso:
+        return (False, "오늘은 이미 퍼즐 조각을 받았어요.")
+
+    # 다음 공개할 조각 찾기(랜덤 순서대로 0인 칸을 1로)
+    mask = list(ps.revealed_mask)
+    next_idx = None
+    for idx in ps.reveal_order:
+        if 0 <= idx < 16 and mask[idx] == "0":
+            next_idx = idx
+            break
+
+    if next_idx is None:
+        return (False, "공개할 조각이 없어요(이미 다 공개된 것 같아요).")
+
+    mask[next_idx] = "1"
+    ps.revealed_mask = "".join(mask)
+    ps.last_award_date = today_iso
+    _save_state(ps)
+
+    # 완성 체크 -> 갤러리로 이동 + 새 퍼즐은 사용자가 다시 고르게(요구사항 ‘원본 미리보기 없음’ 유지)
+    if _mask_count(ps.revealed_mask) >= 16:
+        ts = now_iso()
+        c = conn()
+        cur = c.cursor()
+        cur.execute(
+            """
+            INSERT INTO puzzle_gallery(user_id, category, image_path, completed_on, created_at)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            (user_id, ps.category, ps.image_path, today_iso, ts),
+        )
+        # 진행 퍼즐은 유지해도 되지만, 보통은 새 퍼즐 고르도록 초기화
+        cur.execute("DELETE FROM puzzle_state WHERE user_id = ?;", (user_id,))
+        c.commit()
+        c.close()
+        return (True, "퍼즐이 완성됐어요! 🎉 보관함에 저장했어요.")
+
+    return (True, "퍼즐 조각 1개를 공개했어요! 🧩")
+
+
+def get_gallery(user_id: str) -> List[dict]:
+    c = conn()
+    cur = c.cursor()
+    cur.execute(
+        """
+        SELECT category, image_path, completed_on
+        FROM puzzle_gallery
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT 50;
+        """,
+        (user_id,),
+    )
+    rows = cur.fetchall()
+    c.close()
+
+    out = []
+    for cat, path, day in rows:
+        out.append({"category": cat, "image_path": path, "completed_on": day})
+    return out
+
+
+def slice_image_4x4(image_path: str, size: int = 640) -> List[Image.Image]:
+    """
+    이미지 4x4 조각 리스트 반환(0..15).
+    """
+    img = Image.open(image_path).convert("RGB")
+    img = img.resize((size, size))
+    tile = size // 4
+    pieces: List[Image.Image] = []
+    for r in range(4):
+        for c in range(4):
+            left = c * tile
+            top = r * tile
+            pieces.append(img.crop((left, top, left + tile, top + tile)))
+    return pieces
