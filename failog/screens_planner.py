@@ -14,7 +14,7 @@ from failog.constants import KST
 from failog.ui import inject_css
 
 from failog.date_utils import month_grid, korean_dow, week_start
-from failog.db import (
+from failog.habits_tasks import (
     add_plan_task,
     list_habits,
     add_habit,
