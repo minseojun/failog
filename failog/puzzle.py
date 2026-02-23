@@ -14,7 +14,6 @@ from failog.constants import KST
 from failog.db import conn, now_iso
 
 
-# ✅ Streamlit Cloud에서도 안전한 절대경로
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets", "animals")
 
@@ -48,28 +47,18 @@ def _mask_count(mask: str) -> int:
 
 def _all_assets_exist(category: str) -> List[str]:
     files = CATEGORY_FILES.get(category, [])
-    paths = []
-    for fn in files:
-        p = os.path.join(ASSETS_DIR, category, fn)
-        paths.append(p)
-    return paths
+    return [os.path.join(ASSETS_DIR, category, fn) for fn in files]
 
 
 def pick_random_image_path(user_id: str, category: str) -> str:
-    """
-    카테고리만 고르면 '이미지는 랜덤' 요구 반영.
-    단, 유저별로 너무 자주 바뀌면 혼란스러우니:
-    - 퍼즐 시작 시점에만 랜덤 픽하고 DB에 고정 저장.
-    """
     paths = _all_assets_exist(category)
     existing = [p for p in paths if os.path.exists(p)]
     if not existing:
         raise FileNotFoundError(
             f"assets/animals/{category} 에 이미지가 없어요. "
-            f"경로를 확인: {os.path.join(ASSETS_DIR, category)}"
+            f"경로 확인: {os.path.join(ASSETS_DIR, category)}"
         )
 
-    # 유저별 랜덤 안정화(같은 유저는 같은 카테고리 선택 시 비슷하게 랜덤이 나옴)
     seed = abs(hash(f"{user_id}:{category}:image")) % (2**31 - 1)
     rng = random.Random(seed)
     return rng.choice(existing)
@@ -78,14 +67,12 @@ def pick_random_image_path(user_id: str, category: str) -> str:
 def create_new_puzzle(user_id: str, category: str) -> PuzzleState:
     image_path = pick_random_image_path(user_id, category)
 
-    # ✅ 공개 순서 랜덤(사용자가 원한 “랜덤 순서로 공개”)
     seed = abs(hash(f"{user_id}:{category}:{image_path}:order")) % (2**31 - 1)
     rng = random.Random(seed)
     order = list(range(16))
     rng.shuffle(order)
 
     mask = "0" * 16
-    today = _today_kst().isoformat()
     ts = now_iso()
 
     c = conn()
@@ -156,13 +143,18 @@ def _save_state(ps: PuzzleState):
     c.close()
 
 
-def user_has_any_record_on_date(user_id: str, d: date) -> bool:
+def user_has_activity_today(user_id: str, d: date) -> bool:
     """
-    ✅ “오늘 기록을 남기면 자동 지급” 판단 기준.
-    - 가장 단단한 기준: tasks 테이블에 해당 날짜 row가 1개라도 있으면 기록한 것
-      (plan 추가든 habit 생성이든 status 변경이든 결국 tasks가 생김)
+    ✅ 출석/기록 기준을 'task_date=오늘'이 아니라,
+    '오늘(created_at/updated_at)에 무언가 기록/수정이 있었는지'로 잡음.
+
+    - 계획 추가: created_at 오늘
+    - 성공/실패 체크: updated_at 오늘
+    - 실패원인 저장: updated_at 오늘
+    - (선택날짜가 과거여도) 오늘 앱에서 기록하면 출석 인정
     """
     iso = d.isoformat()
+
     c = conn()
     cur = c.cursor()
     cur.execute(
@@ -170,9 +162,12 @@ def user_has_any_record_on_date(user_id: str, d: date) -> bool:
         SELECT COUNT(1)
         FROM tasks
         WHERE user_id = ?
-          AND task_date = ?
+          AND (
+            substr(created_at, 1, 10) = ?
+            OR substr(updated_at, 1, 10) = ?
+          );
         """,
-        (user_id, iso),
+        (user_id, iso, iso),
     )
     n = int(cur.fetchone()[0] or 0)
     c.close()
@@ -181,29 +176,26 @@ def user_has_any_record_on_date(user_id: str, d: date) -> bool:
 
 def award_piece_if_eligible(user_id: str, d: Optional[date] = None) -> Tuple[bool, str]:
     """
-    ✅ 하루 1번, 오늘 기록이 있으면 퍼즐 조각 1개 자동 공개.
-    Returns: (awarded?, message)
+    ✅ 하루 1번, '오늘 활동이 있으면' 퍼즐 조각 1개 자동 공개.
     """
     d = d or _today_kst()
     today_iso = d.isoformat()
 
     ps = load_puzzle_state(user_id)
     if not ps:
-        return (False, "퍼즐이 아직 시작되지 않았어요. (카테고리를 먼저 선택)")
+        return (False, "퍼즐이 아직 시작되지 않았어요. (카테고리 먼저 선택)")
 
-    # 이미 완료면 아무것도 안함
     if _mask_count(ps.revealed_mask) >= 16:
         return (False, "이미 퍼즐이 완성됐어요.")
 
-    # 오늘 기록이 없으면 지급 안함
-    if not user_has_any_record_on_date(user_id, d):
-        return (False, "오늘 기록이 아직 없어서 조각을 지급하지 않았어요.")
+    # ✅ 오늘 활동이 없으면 지급 안함
+    if not user_has_activity_today(user_id, d):
+        return (False, "오늘 기록/수정 활동이 아직 없어서 조각을 지급하지 않았어요.")
 
-    # 오늘 이미 지급했으면 지급 안함
+    # ✅ 오늘 이미 지급했으면 중복 지급 방지
     if ps.last_award_date == today_iso:
         return (False, "오늘은 이미 퍼즐 조각을 받았어요.")
 
-    # 다음 공개할 조각 찾기(랜덤 순서대로 0인 칸을 1로)
     mask = list(ps.revealed_mask)
     next_idx = None
     for idx in ps.reveal_order:
@@ -219,7 +211,7 @@ def award_piece_if_eligible(user_id: str, d: Optional[date] = None) -> Tuple[boo
     ps.last_award_date = today_iso
     _save_state(ps)
 
-    # 완성 체크 -> 갤러리로 이동 + 새 퍼즐은 사용자가 다시 고르게(요구사항 ‘원본 미리보기 없음’ 유지)
+    # 완성 시 보관함 저장 + 진행퍼즐 초기화
     if _mask_count(ps.revealed_mask) >= 16:
         ts = now_iso()
         c = conn()
@@ -231,7 +223,6 @@ def award_piece_if_eligible(user_id: str, d: Optional[date] = None) -> Tuple[boo
             """,
             (user_id, ps.category, ps.image_path, today_iso, ts),
         )
-        # 진행 퍼즐은 유지해도 되지만, 보통은 새 퍼즐 고르도록 초기화
         cur.execute("DELETE FROM puzzle_state WHERE user_id = ?;", (user_id,))
         c.commit()
         c.close()
@@ -256,16 +247,10 @@ def get_gallery(user_id: str) -> List[dict]:
     rows = cur.fetchall()
     c.close()
 
-    out = []
-    for cat, path, day in rows:
-        out.append({"category": cat, "image_path": path, "completed_on": day})
-    return out
+    return [{"category": cat, "image_path": path, "completed_on": day} for cat, path, day in rows]
 
 
 def slice_image_4x4(image_path: str, size: int = 640) -> List[Image.Image]:
-    """
-    이미지 4x4 조각 리스트 반환(0..15).
-    """
     img = Image.open(image_path).convert("RGB")
     img = img.resize((size, size))
     tile = size // 4
