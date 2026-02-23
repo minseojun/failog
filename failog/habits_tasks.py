@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import List, Dict, Any
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -35,10 +35,15 @@ def add_habit(user_id: str, title: str, dows: List[int]):
     title = (title or "").strip()
     if not title:
         return
+
     mask = ["0"] * 7
     for i in dows:
-        if 0 <= int(i) <= 6:
-            mask[int(i)] = "1"
+        try:
+            ii = int(i)
+        except Exception:
+            continue
+        if 0 <= ii <= 6:
+            mask[ii] = "1"
     dow_mask = "".join(mask)
 
     c = conn()
@@ -67,6 +72,7 @@ def delete_habit(user_id: str, habit_id: int):
     today = date.today().isoformat()
     c = conn()
     cur = c.cursor()
+
     # 미래/오늘 todo habit task 정리
     cur.execute(
         """
@@ -75,8 +81,10 @@ def delete_habit(user_id: str, habit_id: int):
         """,
         (user_id, int(habit_id), today),
     )
+
     # habit 삭제
     cur.execute("DELETE FROM habits WHERE user_id=? AND id=?", (user_id, int(habit_id)))
+
     c.commit()
     c.close()
 
@@ -97,8 +105,13 @@ def ensure_week_habit_tasks(user_id: str, ws: date):
         hid = int(h["id"])
         title = str(h["title"])
         mask = str(h["dow_mask"] or "0000000")
+        if len(mask) != 7:
+            mask = "0000000"
+
         for d in days:
-            if mask[d.weekday()] == "1":
+            wd = d.weekday()  # Mon=0
+            if mask[wd] == "1":
+                # UNIQUE(user_id, task_date, source, habit_id, text) 때문에 OR IGNORE 안전
                 cur.execute(
                     """
                     INSERT OR IGNORE INTO tasks
@@ -116,10 +129,12 @@ def add_plan_task(user_id: str, d: date, text: str):
     text = (text or "").strip()
     if not text:
         return
+
     c = conn()
+    # plan도 중복 방지(유니크 걸릴 수 있음) 위해 OR IGNORE
     c.execute(
         """
-        INSERT INTO tasks
+        INSERT OR IGNORE INTO tasks
           (user_id, task_date, text, source, habit_id, status, fail_reason, created_at, updated_at)
         VALUES (?,?,?,?,?,'todo',NULL,?,?)
         """,
@@ -187,6 +202,31 @@ def count_today_todos(user_id: str) -> int:
     ).fetchone()
     c.close()
     return int(row[0] if row else 0)
+
+
+# ✅ screens_planner가 필요로 하는 함수 (지금 ImportError의 원인)
+def get_habit_task_for_date(
+    user_id: str, d: date, habit_id: int
+) -> Optional[Tuple[int, str, str]]:
+    """
+    Returns (task_id, status, fail_reason) for a habit task on date d.
+    If not found, returns None.
+    """
+    c = conn()
+    row = c.execute(
+        """
+        SELECT id, status, COALESCE(fail_reason,'')
+        FROM tasks
+        WHERE user_id=? AND task_date=? AND source='habit' AND habit_id=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (user_id, d.isoformat(), int(habit_id)),
+    ).fetchone()
+    c.close()
+    if not row:
+        return None
+    return (int(row[0]), str(row[1]), str(row[2] or ""))
 
 
 # ============================================================
