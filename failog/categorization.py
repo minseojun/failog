@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from failog.openai_helpers import openai_client
-from failog.db import get_tasks_range
+from failog.habits_tasks import get_tasks_range
 from failog.db import conn, now_iso
 from failog.dates import week_start
 from failog.constants import CATEGORY_MAP_WINDOW_WEEKS
