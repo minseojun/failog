@@ -15,7 +15,78 @@ ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets" / "animals"  # /moun
 
 CATEGORIES = ["bunny", "guinea", "puppy", "seal"]
 
+import sqlite3
+import json
+from datetime import date
 
+from failog.db import conn, now_iso
+
+
+def _table_exists(c, name: str) -> bool:
+    row = c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
+def _has_column(c, table: str, col: str) -> bool:
+    try:
+        cols = c.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(r[1] == col for r in cols)
+    except Exception:
+        return False
+
+
+def ensure_puzzle_schema():
+    """
+    퍼즐 관련 테이블이 없으면 생성하고,
+    과거 버전 테이블이 있더라도 최소한 조회가 깨지지 않도록 컬럼을 보정한다.
+    """
+    c = conn()
+    cur = c.cursor()
+
+    # 1) 보관함 테이블 (완성한 이미지 컬렉션)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS puzzle_gallery (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          category TEXT NOT NULL,
+          image_path TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+
+    # 2) 현재 퍼즐 진행 상태 테이블 (있는 경우에만 쓸 수도 있지만, 안전하게 같이 보장)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS puzzle_state (
+          user_id TEXT PRIMARY KEY,
+          category TEXT NOT NULL,
+          image_path TEXT NOT NULL,
+          revealed_json TEXT NOT NULL,
+          last_award_date TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+    # (선택) 예전 스키마 호환: 컬럼명이 다르게 존재하는 케이스 방어
+    # gallery 테이블에 category/image_path/created_at 중 하나라도 없으면 추가
+    if _table_exists(c, "puzzle_gallery"):
+        if not _has_column(c, "puzzle_gallery", "category"):
+            cur.execute("ALTER TABLE puzzle_gallery ADD COLUMN category TEXT")
+        if not _has_column(c, "puzzle_gallery", "image_path"):
+            cur.execute("ALTER TABLE puzzle_gallery ADD COLUMN image_path TEXT")
+        if not _has_column(c, "puzzle_gallery", "created_at"):
+            cur.execute("ALTER TABLE puzzle_gallery ADD COLUMN created_at TEXT")
+
+    c.commit()
+    c.close()
+    
 def _list_category_images(category: str) -> List[Path]:
     """
     ✅ 너 레포 구조(assets/animals/bunny1.jpeg ...)에 맞춰서
