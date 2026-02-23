@@ -66,19 +66,36 @@ def ensure_puzzle_tables():
         """
     )
 
-     # 기존 배포 DB(구버전 스키마) 마이그레이션: 누락 컬럼 보강
+       # 기존 배포 DB(구버전 스키마) 마이그레이션: 누락 컬럼 보강
     state_cols = {row[1] for row in cur.execute("PRAGMA table_info(puzzle_state)").fetchall()}
+    if "category" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN category TEXT")
+    if "image_path" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN image_path TEXT")
+    if "seed" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN seed INTEGER DEFAULT 1")
+    if "revealed_json" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN revealed_json TEXT DEFAULT '[]'")
     if "last_award_date" not in state_cols:
         cur.execute("ALTER TABLE puzzle_state ADD COLUMN last_award_date TEXT")
+    if "created_at" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN created_at TEXT")
+    if "updated_at" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN updated_at TEXT")
     if "completed_at" not in state_cols:
         cur.execute("ALTER TABLE puzzle_state ADD COLUMN completed_at TEXT")
 
     gallery_cols = {row[1] for row in cur.execute("PRAGMA table_info(puzzle_gallery)").fetchall()}
+    if "category" not in gallery_cols:
+        cur.execute("ALTER TABLE puzzle_gallery ADD COLUMN category TEXT")
+    if "image_path" not in gallery_cols:
+        cur.execute("ALTER TABLE puzzle_gallery ADD COLUMN image_path TEXT")
     if "completed_at" not in gallery_cols:
         cur.execute("ALTER TABLE puzzle_gallery ADD COLUMN completed_at TEXT")
-        
+
     c.commit()
     c.close()
+
 
 
 # =========================================================
@@ -220,7 +237,7 @@ def load_state(user_id: str) -> Optional[PuzzleState]:
         user_id=str(row[0]),
         category=str(row[1]),
         image_path=str(row[2]),
-        seed=int(row[3]),
+        seed=(int(row[3]) if row[3] is not None else 1),
         revealed=revealed,
         last_award_date=(str(row[5]) if row[5] else None),
         completed_at=(str(row[6]) if row[6] else None),
