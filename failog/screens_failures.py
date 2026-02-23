@@ -26,7 +26,6 @@ from failog.openai_prefs import effective_openai_key, effective_openai_model
 # LLM functions
 from failog.coaching import llm_weekly_reason_analysis, llm_overall_coaching, llm_chat
 from failog.coaching import normalize_reason, repeated_reason_flags, compute_user_signals
-
 from failog.coaching import llm_weekly_experiment
 
 # misc
@@ -39,12 +38,50 @@ except Exception:
     geocode_city = None
 
 
-def screen_failures(user_id: str):
-    # ✅ 요청: "Failure Report" 큰 제목 삭제 -> st.markdown("## Failure Report") 제거
+def _format_weekly_experiment_for_display(exp: dict) -> dict:
+    """
+    exp가 새 포맷({"experiment","reason"})이든
+    구 포맷({"experiment_rule","dominant_pattern"...})이든
+    화면에서는 무조건 한국어 2줄로 보여주기 위한 방어 포맷터.
+    """
+    if not isinstance(exp, dict):
+        return {"experiment": "이번 주 실험: (없음)", "reason": "추천 이유: (없음)"}
 
-    # ✅ failure report 화면에서만 추가 CSS 오버라이드:
-    # - 탭 아래 검정 라인 제거
-    # - 상단 날짜 네비(화살표/날짜박스) 더 작게 + 가운데 정렬 보장
+    experiment = (exp.get("experiment") or "").strip()
+    reason = (exp.get("reason") or "").strip()
+
+    # 구 포맷 호환(혹시 llm_weekly_experiment를 아직 안 바꿨을 때)
+    if not experiment:
+        rule = (exp.get("experiment_rule") or "").strip()
+        if rule:
+            experiment = f"이번 주 실험: {rule}"
+    if not reason:
+        dom = (exp.get("dominant_pattern") or "").strip()
+        if dom:
+            reason = f"추천 이유: {dom}"
+
+    if not experiment:
+        experiment = "이번 주 실험: 하루 계획을 3개 이하로 제한하기"
+    if not reason:
+        reason = "추천 이유: 최근 실패 패턴에서 과부하 신호가 보여 먼저 계획량을 줄이는 게 효과적이기 때문이에요."
+
+    # 혹시 모델이 "추천 이유:" 같은 접두어를 안 붙였으면 붙여주기
+    if not experiment.startswith("이번 주 실험:"):
+        experiment = f"이번 주 실험: {experiment}"
+    if not reason.startswith("추천 이유:"):
+        reason = f"추천 이유: {reason}"
+
+    # 너무 길면 1~2줄로 읽기 어렵기 때문에 살짝 컷(원하면 제거 가능)
+    experiment = experiment.strip()
+    reason = reason.strip()
+
+    return {"experiment": experiment, "reason": reason}
+
+
+def screen_failures(user_id: str):
+    # ✅ 요청: "Failure Report" 큰 제목 삭제
+
+    # ✅ failure report 화면에서만 CSS 오버라이드:
     st.markdown(
         """
 <style>
@@ -60,14 +97,14 @@ def screen_failures(user_id: str):
 }
 .date-box {
   display: inline-block;
-  padding: 6px 10px;            /* ✅ 조금 더 작게 */
+  padding: 6px 10px;
   border: 1px solid rgba(17,17,17,0.55);
   background: #f3f4f6;
   font-weight: 900;
-  font-size: 0.98rem;           /* ✅ 조금 더 작게 */
+  font-size: 0.98rem;
   line-height: 1.1;
-  text-align: center;           /* ✅ 날짜 중앙 */
-  width: 100%;                  /* ✅ column 안에서 정중앙 */
+  text-align: center;
+  width: 100%;
   box-sizing: border-box;
 }
 </style>
@@ -82,6 +119,12 @@ def screen_failures(user_id: str):
     base = date.today() - timedelta(days=7 * offset)
     ws = week_start(base)
     we = ws + timedelta(days=6)
+
+    # ✅ 주가 바뀌면 주간 실험 결과는 자동 초기화(이전 주 결과가 남아 헷갈리는 문제 방지)
+    week_key = ws.isoformat()
+    if st.session_state.get("__weekly_experiment_week__") != week_key:
+        st.session_state["__weekly_experiment_week__"] = week_key
+        st.session_state.pop("weekly_experiment", None)
 
     # ✅ 상단 주 이동 UI: 날짜 가운데 정렬 + 박스/버튼 작게
     st.markdown("<div class='small-nav'>", unsafe_allow_html=True)
@@ -115,7 +158,6 @@ def screen_failures(user_id: str):
     # Dashboard
     # -------------------------
     with tab1:
-        # 그래프 제목을 섹션 타이틀로(연회색 박스 + 볼드)
         section_title("이번 주 실패(요일 분포)")
         dow_df = failures_by_dow(df)
         c_dow = (
@@ -212,10 +254,11 @@ def screen_failures(user_id: str):
         if not api_key:
             st.info("OpenAI 키가 설정되면 분석/코칭이 표시돼요. (Planner 화면 하단 OpenAI 설정)")
             return
-            
- # --- 주간 1개 실험 (Behavioral Experiment) ---
+
+        # --- 주간 1개 실험 (Behavioral Experiment) ---
         st.markdown("<hr/>", unsafe_allow_html=True)
-        
+        section_title("이번 주 실험(1개)")
+
         end4 = ws + timedelta(days=6)
         start4 = ws - timedelta(days=27)  # 4주(28일) 범위
         last4 = get_tasks_range(user_id, start4, end4)
@@ -233,7 +276,12 @@ def screen_failures(user_id: str):
             "total_tasks": int(len(last4)),
             "total_failures": int(len(last4_fail)),
             "top_fail_reasons": (
-                last4_fail["fail_reason"].fillna("").map(lambda s: str(s).strip()).value_counts().head(6).to_dict()
+                last4_fail["fail_reason"]
+                .fillna("")
+                .map(lambda s: str(s).strip())
+                .value_counts()
+                .head(6)
+                .to_dict()
                 if not last4_fail.empty
                 else {}
             ),
@@ -248,7 +296,7 @@ def screen_failures(user_id: str):
 
         signals_28 = compute_user_signals(user_id, days=28)
 
-        if st.button("주간 실험", use_container_width=True, key="weekly_exp_btn"):
+        if st.button("주간 실험 추천 받기", use_container_width=True, key="weekly_exp_btn"):
             try:
                 with st.spinner("주간 실험 설계 중..."):
                     exp = llm_weekly_experiment(
@@ -263,25 +311,26 @@ def screen_failures(user_id: str):
             except Exception as e:
                 st.error(f"주간 실험 생성 실패: {type(e).__name__}")
 
-        exp = st.session_state.get("weekly_experiment")
-        if exp and isinstance(exp, dict):
+        exp_raw = st.session_state.get("weekly_experiment")
+        if exp_raw and isinstance(exp_raw, dict):
+            exp_disp = _format_weekly_experiment_for_display(exp_raw)
             with st.container(border=True):
-                st.markdown(f"**dominant_pattern**: {exp.get('dominant_pattern','')}")
-                st.markdown(f"**experiment_rule**: {exp.get('experiment_rule','')}")
-                st.markdown(f"**measurement_metric**: {exp.get('measurement_metric','')}")
-                st.markdown(f"**expected_behavioral_shift**: {exp.get('expected_behavioral_shift','')}")
+                st.markdown(f"**{exp_disp['experiment']}**")
+                st.caption(exp_disp["reason"])
 
-                if exp.get("error"):
-                    st.caption(f"(debug) {exp.get('error')}")
-        else:
-            st.caption("버튼을 누르면 다음 7일 동안 적용할 ‘단 하나의 규칙’이 생성돼요.")
-            
+                # 디버그 필요하면 살려두기(원치 않으면 삭제)
+                if exp_raw.get("error"):
+                    st.caption(f"(debug) {exp_raw.get('error')}")
+
         # --- 원인 주간 분석 (버튼 누르면 바로 생성/갱신) ---
+        st.markdown("<hr/>", unsafe_allow_html=True)
+        section_title("원인 주간 분석")
+
         weekly_reasons = [r for r in fails["fail_reason"].fillna("").tolist() if str(r).strip()]
         if len(weekly_reasons) == 0:
             st.write("이번 주에는 실패 원인 입력이 아직 없어요.")
         else:
-            if st.button("원인 주간 분석", use_container_width=True, key="weekly_analyze"):
+            if st.button("원인 주간 분석 생성", use_container_width=True, key="weekly_analyze"):
                 try:
                     st.session_state["weekly_analysis"] = llm_weekly_reason_analysis(api_key, model, weekly_reasons)
                 except Exception as e:
@@ -297,9 +346,10 @@ def screen_failures(user_id: str):
                         for s in (g.get("examples") or [])[:3]:
                             st.write(f"- {s}")
 
-        st.markdown("<hr/>", unsafe_allow_html=True)
-
         # --- 맞춤형 AI 코칭 (버튼 누르면 바로 생성/갱신) ---
+        st.markdown("<hr/>", unsafe_allow_html=True)
+        section_title("맞춤형 AI 코칭")
+
         all_fail = get_all_failures(user_id, limit=350)
         if all_fail.empty:
             st.write("아직 실패 데이터가 없어요.")
@@ -321,7 +371,7 @@ def screen_failures(user_id: str):
             )
         signals = compute_user_signals(user_id, days=28)
 
-        if st.button("맞춤형 AI 코칭", use_container_width=True, key="overall_coach_btn"):
+        if st.button("맞춤형 AI 코칭 생성", use_container_width=True, key="overall_coach_btn"):
             try:
                 st.session_state["overall_coach"] = llm_overall_coaching(api_key, model, items, signals)
             except Exception as e:
@@ -344,12 +394,11 @@ def screen_failures(user_id: str):
                         st.markdown("**2주+ 반복이면: 창의적 대안**")
                         for tip in creative[:3]:
                             st.write(f"- {tip}")
-        else:
-            st.caption("버튼을 눌러 코칭을 받아보세요.")
-
-        st.markdown("<hr/>", unsafe_allow_html=True)
 
         # --- 코칭 챗봇 ---
+        st.markdown("<hr/>", unsafe_allow_html=True)
+        section_title("코칭 챗봇")
+
         if "chat_messages" not in st.session_state:
             st.session_state["chat_messages"] = []
 
@@ -400,7 +449,6 @@ def screen_failures(user_id: str):
     # PDF report
     # -------------------------
     with tab3:
-        # 빈화면 이슈 방지: 항상 안내 먼저 출력
         st.caption("주간 PDF 리포트를 생성하고 다운로드할 수 있어요. (한글 폰트 포함)")
 
         city = ck_get("failog_city", "").strip()
