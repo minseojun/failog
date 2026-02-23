@@ -29,44 +29,60 @@ def openai_client(api_key: str):
 
 
 # ============================================================
-# Coaching prompts (원본 그대로)
+# Coaching prompts (업그레이드)
 # ============================================================
-BASE_COACH_PROMPT = (
-    "사용자의 계획 실패 이유 목록을 분석해 공통 원인을 3가지 이내로 분류하고, "
-    "각 원인에 대해 실행 가능하고 현실적인 개선 조언을 제시해줘. "
-    "앞에서 했던 실패가 2주 이상 반복된다면 창의적인 다른 조언을 제시해. "
-    "톤은 비난 없이 코칭 중심으로 작성해."
-)
+# 핵심: "패턴 → 원인 → 행동"을 자연스럽게 연결하고, 뻔한 조언(운동하세요/일찍 자세요)을 방지
+BASE_COACH_PROMPT = """
+너는 사용자의 '실패 기록'을 바탕으로 다음 주의 행동을 바꾸게 만드는 코치야.
+
+목표:
+- 실패를 비난하지 않는다.
+- '사용자 데이터에 근거한' 공통 원인을 최대 3개로 묶는다.
+- 각 원인별로 이번 주 바로 실행 가능한 "작고 구체적인 행동"을 제시한다.
+- 같은 실패가 2주 이상 반복되는 원인은, 기존 조언과 결이 다른 '완전히 다른 접근'의 대안을 추가한다.
+
+금지:
+- 뻔한 상투어(의지만 가지세요/힘내세요/열심히 하세요) 금지
+- 추상적 조언(관리해보세요/줄여보세요) 금지
+- 사용자의 데이터 언급 없이 일반론만 말하기 금지
+""".strip()
 
 COACH_SCHEMA = """
 반드시 JSON만 출력해. (설명/마크다운 금지)
+
 형식:
 {
   "top_causes":[
     {
-      "cause":"원인 카테고리(짧게)",
-      "summary":"사용자 데이터(항목명/요일/패턴/원문 표현)를 반영한 2~4문장",
+      "cause":"원인 카테고리(짧게, 3~10자)",
+      "why_this_cause":"사용자 데이터 근거 1줄 (요일/반복/원문표현/항목 유형 등 구체 단서 포함)",
+      "summary":"2~4문장. 사용자 데이터 단서 2개 이상을 섞어서 '패턴→원인'을 자연스럽게 설명",
       "actionable_advice":[
-        "이번 주에 바로 가능한 아주 구체적인 조언1",
+        "이번 주에 바로 가능한 아주 구체적인 조언1 (1문장, 조건/시간/수치 포함 권장)",
         "조언2",
         "조언3"
       ],
       "creative_advice_when_repeated_2w":[
-        "(2주+ 반복이면) 완전히 다른 접근의 창의적 대안1",
+        "(2주+ 반복인 경우) 기존 조언과 다른 접근의 창의적 대안1",
         "대안2"
       ]
     }
   ]
 }
+
 규칙:
 - top_causes 최대 3개
-- summary/advice는 반드시 '사용자 데이터'의 구체 요소를 최소 2개 이상 언급
-- actionable_advice는 '작고 구체적'
+- 각 cause에는 actionable_advice를 2~3개만 채워라(너무 길게 금지)
+- actionable_advice는 '행동 규칙' 형태를 우선: 시간 제한 / 수량 제한 / If-Then / 환경 변화 중 하나
+- why_this_cause에는 사용자 데이터 단서가 반드시 1개 이상 들어가야 함(예: '최근 4주 중 월/수에 실패가 집중' 같은 표현)
+- repeated_2w=true인 실패 원인이 하나라도 있으면 해당 cause의 creative_advice_when_repeated_2w는 반드시 1~2개 채워라
 - 비난/자책 유도 금지
-- repeated_2w=true 항목이 하나라도 있으면 해당 원인에는 creative_advice_when_repeated_2w를 반드시 채워라
 """.strip()
 
 
+# ============================================================
+# Utils
+# ============================================================
 def normalize_reason(text: str) -> str:
     t = (text or "").strip().lower()
     t = re.sub(r"\s+", " ", t)
@@ -153,6 +169,33 @@ def compute_user_signals(user_id: str, days: int = 28) -> Dict[str, Any]:
     }
 
 
+def _safe_json_loads(s: str) -> Optional[Dict[str, Any]]:
+    """LLM이 JSON 외 텍스트를 섞어도 최대한 JSON만 추출해서 파싱."""
+    if not s:
+        return None
+    s = s.strip()
+
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    try:
+        i = s.find("{")
+        j = s.rfind("}")
+        if i != -1 and j != -1 and j > i:
+            sub = s[i : j + 1]
+            obj = json.loads(sub)
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        return None
+
+    return None
+
+
 # ============================================================
 # LLM calls
 # ============================================================
@@ -197,27 +240,38 @@ def llm_overall_coaching(
     fail_items: List[Dict[str, Any]],
     signals: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """
+    맞춤형 AI 코칭 (업그레이드):
+    - 'why_this_cause'를 추가해 근거 1줄을 강제 → 내용 퀄리티 상승
+    - 조언을 '행동 규칙' 형태로 유도 → 실용성 상승
+    """
     client = openai_client(api_key)
+
     prompt = f"""
 {BASE_COACH_PROMPT}
 
-사용자 패턴 요약:
+사용자 패턴 요약(JSON):
 {json.dumps(signals, ensure_ascii=False, indent=2)}
 
-실패 기록 샘플:
+실패 기록 샘플(JSON):
 {json.dumps(fail_items, ensure_ascii=False, indent=2)}
 
+반드시 아래 스키마를 지켜 JSON만 출력해:
 {COACH_SCHEMA}
 """.strip()
 
     resp = client.chat.completions.create(
         model=(model or "gpt-4o-mini"),
         messages=[
-            {"role": "system", "content": "You are a supportive coaching assistant. Output must be valid JSON only."},
+            {
+                "role": "system",
+                "content": "You are a precise, practical coaching assistant. Output must be valid JSON only.",
+            },
             {"role": "user", "content": prompt},
         ],
-        temperature=0.75,
+        temperature=0.6,  # 0.75 -> 0.6: 덜 흔들리고 더 일관된 조언
     )
+
     text = (resp.choices[0].message.content or "").strip()
     try:
         return json.loads(text)
@@ -239,13 +293,6 @@ def llm_chat(api_key: str, model: str, system_context: str, msgs: List[Dict[str,
 def llm_plan_alternatives(api_key: str, model: str, context: Dict[str, Any]) -> Dict[str, Any]:
     """
     작성 시점 plan 대안 제시용
-    context 예:
-      {
-        "plan_text": "...",
-        "risk_score": 78,
-        "risk_reasons": [...],
-        "recent_stats": {...}
-      }
     """
     client = openai_client(api_key)
     prompt = f"""
@@ -262,8 +309,8 @@ def llm_plan_alternatives(api_key: str, model: str, context: Dict[str, Any]) -> 
   "if_then": ["만약 (실패조건) 이면 (대응행동)","만약 ..."]
 }}
 규칙:
-- rewrite는 원문과 의미가 이어져야 함(목표 유지)
-- alternatives는 실행 가능하고 아주 작게
+- rewrite는 원문과 목표가 이어져야 함(목표 유지)
+- alternatives는 실행 가능하고 아주 작게(수치/시간 포함 권장)
 - if_then은 원인/패턴에 맞게 구체적으로
 """.strip()
 
@@ -283,36 +330,6 @@ def llm_plan_alternatives(api_key: str, model: str, context: Dict[str, Any]) -> 
         return json.loads(m.group(0)) if m else {"rewrite": "", "alternatives": [], "if_then": []}
 
 
-
-def _safe_json_loads(s: str) -> Optional[Dict[str, Any]]:
-    """LLM이 JSON 외 텍스트를 섞어도 최대한 JSON만 추출해서 파싱."""
-    if not s:
-        return None
-    s = s.strip()
-
-    # 이미 JSON처럼 보이면 그대로 시도
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj
-    except Exception:
-        pass
-
-    # 앞/뒤 잡문 제거: 첫 '{' ~ 마지막 '}' 사이만 추출
-    try:
-        i = s.find("{")
-        j = s.rfind("}")
-        if i != -1 and j != -1 and j > i:
-            sub = s[i : j + 1]
-            obj = json.loads(sub)
-            if isinstance(obj, dict):
-                return obj
-    except Exception:
-        return None
-
-    return None
-
-
 def llm_weekly_experiment(
     api_key: str,
     model: str,
@@ -322,100 +339,72 @@ def llm_weekly_experiment(
     recent_fail_texts: List[str],
 ) -> Dict[str, Any]:
     """
-    "주간 1개 실험" 생성기.
-    - 반드시 JSON만 반환하도록 강제
-    - 파싱 실패 시에도 안전한 fallback 반환
+    ✅ 주간 실험 생성기 (요구사항 반영):
+    - 결과 형식: 한국어로 깔끔하게
+      - experiment: "이번 주 실험: ..."
+      - reason: "추천 이유: ..." (한 줄)
+    - JSON만 반환(파싱 안정)
     """
-    # ✅ 너가 유저 메시지로 준 프롬프트를 그대로 시스템 컨텍스트로 사용
-    system_prompt = f"""
-You are a behavioral design AI.
+    client = openai_client(api_key)
 
-Your task is to design ONE weekly experiment to reduce the user's recurring failure pattern.
+    # 핵심: 출력 형태를 '딱 2필드'로 고정하고, 한국어 한 줄 이유를 강제
+    prompt = f"""
+너는 사용자의 실패 기록을 바탕으로 "이번 주에 시도할 실험 1개"를 추천하는 코치야.
 
-Context:
-- Recent failure summary (last 4 weeks):
+컨텍스트:
+- 최근 4주 요약:
 {json.dumps(failure_summary, ensure_ascii=False)}
 
-- Top recurring failure patterns:
+- 반복 패턴(top):
 {json.dumps(top_patterns, ensure_ascii=False)}
 
-- Behavioral signals:
+- 사용자 신호:
 {json.dumps(signals, ensure_ascii=False)}
 
-- Recent failure examples (raw texts):
+- 최근 실패 원문(참고):
 {json.dumps(recent_fail_texts, ensure_ascii=False)}
 
-Instructions:
+요구사항:
+1) 실험은 반드시 1개만.
+2) 실험 문장은 한국어로 짧고 명확하게(규칙/제약 형태 권장: 시간 제한, 수량 제한, If-Then, 환경 변화 중 하나).
+3) 추천 이유는 한국어 "한 줄"로만. (데이터 단서 1개 이상 포함: 예 '최근 4주 중 월/수 실패가 많음', '상위 실패 원인이 ~', '특정 유형 계획이 반복 실패' 등)
+4) 조언/대안 여러 개 금지. 동기부여 문장 금지.
 
-1. Identify the single most dominant behavioral pattern.
-2. Design exactly ONE experiment for the next 7 days.
-3. The experiment must:
-   - Be specific and immediately actionable
-   - Be measurable with a clear metric
-   - Reduce friction rather than increase workload
-   - Focus on limiting, simplifying, or restructuring behavior
-   - Not include motivational language
-   - Not include multiple suggestions
-
-4. The experiment rule must follow ONE of these formats:
-   - Time restriction (e.g., "No new tasks after 9 PM")
-   - Quantity limit (e.g., "Maximum 3 tasks per day")
-   - If-Then trigger (e.g., "If task takes >30 min, break into 10-min blocks")
-   - Environmental change (e.g., "Work only at library for deep tasks")
-
-Return ONLY valid JSON in the following format:
+반드시 JSON만 출력해(설명/마크다운 금지). 형식은 아래와 같아:
 
 {{
-  "dominant_pattern": "",
-  "experiment_rule": "",
-  "measurement_metric": "",
-  "expected_behavioral_shift": ""
+  "experiment": "이번 주 실험: ...",
+  "reason": "추천 이유: ..."
 }}
 """.strip()
 
-    # ✅ llm_chat이 이미 레포에서 사용 중이므로, 같은 호출 경로를 재사용
-    # llm_chat(api_key, model, system_context, messages) 가 있다고 가정
-    try:
-        text = llm_chat(
-            api_key,
-            model,
-            system_prompt,
-            [{"role": "user", "content": "Generate the JSON now."}],
-        )
-    except Exception as e:
-        # 호출 자체 실패
-        return {
-            "dominant_pattern": "unknown",
-            "experiment_rule": "",
-            "measurement_metric": "",
-            "expected_behavioral_shift": "",
-            "error": f"OpenAI call failed: {type(e).__name__}",
-        }
+    resp = client.chat.completions.create(
+        model=(model or "gpt-4o-mini"),
+        messages=[
+            {"role": "system", "content": "Return valid JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.45,  # 너무 창의적으로 튀지 않게
+    )
 
-    obj = _safe_json_loads(str(text))
+    text = (resp.choices[0].message.content or "").strip()
+    obj = _safe_json_loads(text)
+
     if not obj:
         return {
-            "dominant_pattern": "unknown",
-            "experiment_rule": "",
-            "measurement_metric": "",
-            "expected_behavioral_shift": "",
+            "experiment": "이번 주 실험: 하루 계획을 3개 이하로 제한하기",
+            "reason": "추천 이유: 최근 실패가 누적될수록 늘어나는 경향이 있어 과부하를 먼저 줄이는 게 효과적이기 때문이에요.",
             "error": "JSON parse failed",
-            "raw": str(text)[:4000],
+            "raw": str(text)[:2000],
         }
 
-    # ✅ 키 보정/검증: 누락되면 빈 문자열로 채움(화면에서 오류 방지)
-    out = {
-        "dominant_pattern": str(obj.get("dominant_pattern", "") or "").strip(),
-        "experiment_rule": str(obj.get("experiment_rule", "") or "").strip(),
-        "measurement_metric": str(obj.get("measurement_metric", "") or "").strip(),
-        "expected_behavioral_shift": str(obj.get("expected_behavioral_shift", "") or "").strip(),
-    }
+    experiment = str(obj.get("experiment", "") or "").strip()
+    reason = str(obj.get("reason", "") or "").strip()
 
-    # 최소 방어: experiment_rule이 비어 있으면 fallback
-    if not out["experiment_rule"]:
-        out["dominant_pattern"] = out["dominant_pattern"] or "unknown"
-        out["experiment_rule"] = "Maximum 3 tasks per day"
-        out["measurement_metric"] = "Days (out of 7) where tasks added <= 3"
-        out["expected_behavioral_shift"] = "Reduce over-commitment by limiting daily task intake"
+    # 최소 방어
+    if not experiment:
+        experiment = "이번 주 실험: 하루 계획을 3개 이하로 제한하기"
+    if not reason:
+        reason = "추천 이유: 최근 실패 패턴에서 '과도한 계획' 신호가 보여 먼저 계획량을 줄이는 게 효과적이기 때문이에요."
 
-    return out
+    return {"experiment": experiment, "reason": reason}
