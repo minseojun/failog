@@ -17,7 +17,7 @@ from failog.db import conn, now_iso
 # =========================================================
 # Config
 # =========================================================
-GRID_N = 4  # 4x4 = 16
+GRID_N = 4
 TILE_COUNT = GRID_N * GRID_N
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +32,7 @@ CATEGORIES: Dict[str, List[str]] = {
 
 
 # =========================================================
-# ✅ DB schema guard (핵심: 기존 DB에도 테이블 자동 생성)
+# ✅ DB schema guard (기존 DB에도 자동 생성)
 # =========================================================
 def ensure_puzzle_tables():
     c = conn()
@@ -110,7 +110,7 @@ def _safe_int_list(x) -> List[int]:
 def _list_available_images(category: str) -> List[Path]:
     if category not in CATEGORIES:
         return []
-    paths = []
+    paths: List[Path] = []
     for fn in CATEGORIES[category]:
         p = ANIMALS_DIR / fn
         if p.exists() and p.is_file():
@@ -121,17 +121,15 @@ def _list_available_images(category: str) -> List[Path]:
 def _choose_random_image(category: str) -> Path:
     imgs = _list_available_images(category)
     if not imgs:
-        raise FileNotFoundError(
-            f"assets/animals 에 '{category}' 이미지가 없어요. 경로/파일명을 확인해 주세요: {ANIMALS_DIR}"
-        )
+        raise FileNotFoundError(f"assets/animals 경로를 확인해 주세요: {ANIMALS_DIR}")
     return random.choice(imgs)
 
 
 def _make_placeholder_png(size: Tuple[int, int]) -> bytes:
     w, h = size
-    img = Image.new("RGB", (w, h), (243, 244, 246))  # #f3f4f6
+    img = Image.new("RGB", (w, h), (243, 244, 246))  # 연회색
     draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, w - 1, h - 1], outline=(17, 17, 17), width=1)
+    draw.rectangle([0, 0, w - 1, h - 1], outline=(17, 17, 17), width=1)  # 얇은 테두리
     buf = BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -167,21 +165,17 @@ def _tile_bytes_from_image(image_path_str: str, target_tile_px: int = 160) -> Tu
 
 
 def _tasks_exist_today(user_id: str, d: date) -> bool:
+    """오늘 날짜로 task가 하나라도 있으면 '기록했다'로 간주"""
     day = d.isoformat()
     c = conn()
     row = c.execute(
         """
         SELECT 1
         FROM tasks
-        WHERE user_id=?
-          AND task_date=?
-          AND (
-            created_at LIKE ? || '%'
-            OR updated_at LIKE ? || '%'
-          )
+        WHERE user_id=? AND task_date=?
         LIMIT 1
         """,
-        (user_id, day, day, day),
+        (user_id, day),
     ).fetchone()
     c.close()
     return bool(row)
@@ -202,6 +196,7 @@ def load_state(user_id: str) -> Optional[PuzzleState]:
         (user_id,),
     ).fetchone()
     c.close()
+
     if not row:
         return None
 
@@ -284,10 +279,7 @@ def load_gallery(user_id: str) -> List[Dict[str, str]]:
         (user_id,),
     ).fetchall()
     c.close()
-    out = []
-    for cat, path, ts in rows:
-        out.append({"category": str(cat), "image_path": str(path), "completed_at": str(ts)})
-    return out
+    return [{"category": str(a), "image_path": str(b), "completed_at": str(ca)} for a, b, ca in rows]
 
 
 # =========================================================
@@ -295,12 +287,11 @@ def load_gallery(user_id: str) -> List[Dict[str, str]]:
 # =========================================================
 def start_new_puzzle(user_id: str, category: str) -> PuzzleState:
     img = _choose_random_image(category)
-    seed = random.randint(1, 2_000_000_000)
     stt = PuzzleState(
         user_id=user_id,
         category=category,
         image_path=str(img),
-        seed=seed,
+        seed=random.randint(1, 2_000_000_000),
         revealed=[],
         last_award_date=None,
         completed_at=None,
@@ -349,10 +340,6 @@ def award_piece_if_eligible(user_id: str, d: date) -> Tuple[bool, Optional[int],
     else:
         save_state(state)
         return (True, piece, "🧩 퍼즐 조각 1개가 공개됐어요!")
-
-
-def get_render_payload(user_id: str) -> Dict[str, object]:
-    return {"state": load_state(user_id), "gallery": load_gallery(user_id)}
 
 
 def build_tiles_for_state(state: PuzzleState, tile_px: int = 170) -> Tuple[List[bytes], bytes]:
