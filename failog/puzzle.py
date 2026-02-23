@@ -1,295 +1,187 @@
 # failog/puzzle.py
 from __future__ import annotations
 
+import json
+import os
+import random
 from dataclasses import dataclass
 from datetime import date
-from io import BytesIO
-from pathlib import Path
-import random
+from typing import Any
 
-from PIL import Image
-
-from failog.db import conn, now_iso
-from failog.puzzle_assets import get_animal_assets
-
-# "오늘 기록 남김" 판단을 위해 Planner가 쓰는 함수 재사용
-# (너 레포에 이미 있음: failog.db.list_tasks_for_date)
-from failog.db import list_tasks_for_date
+from failog.prefs import ck_get, ck_set
 
 
-GRID = 4
-PIECES = GRID * GRID
+ASSETS_DIR = os.path.join("assets", "animals")
+CATEGORIES = ["bunny", "guinea", "puppy", "seal"]
 
 
 @dataclass
-class PuzzleRun:
-    id: int
-    user_id: str
-    image_key: str
-    unlocked_mask: str  # length 16, '0'/'1'
-    started_at: str
-    completed_at: str | None
-    last_reward_date: str | None
+class PuzzleState:
+    category: str
+    image_path: str
+    progress: int  # 0..16
+    reveal_order: list[int]  # permutation of 0..15
+    last_award_date: str  # ISO date string, '' if never
+    completed: bool = False
 
 
-def _mask_normalize(mask: str | None) -> str:
-    m = (mask or "").strip()
-    if len(m) != PIECES or any(ch not in "01" for ch in m):
-        return "0" * PIECES
-    return m
+def _key(user_id: str) -> str:
+    return f"failog_puzzle_state__{user_id}"
 
 
-def _today_iso(d: date | None = None) -> str:
-    return (d or date.today()).isoformat()
+def _collection_key(user_id: str) -> str:
+    return f"failog_puzzle_collection__{user_id}"
 
 
-def ensure_puzzle_tables():
-    c = conn()
-    cur = c.cursor()
+def list_images(category: str) -> list[str]:
+    """
+    assets/animals 안에서 {category}{n}.jpeg 같은 파일을 찾는다.
+    """
+    if category not in CATEGORIES:
+        return []
 
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS puzzle_runs (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id TEXT NOT NULL,
-          image_key TEXT NOT NULL,
-          unlocked_mask TEXT NOT NULL,
-          started_at TEXT NOT NULL,
-          completed_at TEXT,
-          last_reward_date TEXT
-        );
-        """
-    )
+    if not os.path.isdir(ASSETS_DIR):
+        return []
 
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS puzzle_collection (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id TEXT NOT NULL,
-          image_key TEXT NOT NULL,
-          completed_at TEXT NOT NULL,
-          UNIQUE(user_id, image_key)
-        );
-        """
-    )
+    files = []
+    for fn in os.listdir(ASSETS_DIR):
+        low = fn.lower()
+        if not low.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            continue
+        if low.startswith(category.lower()):
+            files.append(os.path.join(ASSETS_DIR, fn))
 
-    c.commit()
-    c.close()
+    files.sort()
+    return files
 
 
-def get_active_run(user_id: str) -> PuzzleRun | None:
-    ensure_puzzle_tables()
-    c = conn()
-    cur = c.cursor()
-    cur.execute(
-        """
-        SELECT id, user_id, image_key, unlocked_mask, started_at, completed_at, last_reward_date
-        FROM puzzle_runs
-        WHERE user_id = ? AND completed_at IS NULL
-        ORDER BY id DESC
-        LIMIT 1;
-        """,
-        (user_id,),
-    )
-    row = cur.fetchone()
-    c.close()
-    if not row:
+def _stable_shuffle_order(seed_text: str) -> list[int]:
+    """
+    랜덤 공개 순서지만, 같은 이미지면 항상 같은 랜덤 순서가 나오게(고정 랜덤).
+    """
+    r = random.Random(seed_text)
+    order = list(range(16))
+    r.shuffle(order)
+    return order
+
+
+def load_state(user_id: str) -> PuzzleState | None:
+    raw = ck_get(_key(user_id), "")
+    if not raw:
         return None
-    return PuzzleRun(
-        id=int(row[0]),
-        user_id=str(row[1]),
-        image_key=str(row[2]),
-        unlocked_mask=_mask_normalize(row[3]),
-        started_at=str(row[4]),
-        completed_at=row[5],
-        last_reward_date=row[6],
-    )
-
-
-def start_new_run(user_id: str, image_key: str) -> PuzzleRun:
-    ensure_puzzle_tables()
-
-    # 동시에 1개만: 기존 active가 있으면 그대로 반환
-    existing = get_active_run(user_id)
-    if existing:
-        return existing
-
-    c = conn()
-    cur = c.cursor()
-    cur.execute(
-        """
-        INSERT INTO puzzle_runs(user_id, image_key, unlocked_mask, started_at, completed_at, last_reward_date)
-        VALUES(?, ?, ?, ?, NULL, NULL);
-        """,
-        (user_id, image_key, "0" * PIECES, now_iso()),
-    )
-    c.commit()
-    rid = int(cur.lastrowid)
-    c.close()
-
-    return get_active_run(user_id) or PuzzleRun(
-        id=rid,
-        user_id=user_id,
-        image_key=image_key,
-        unlocked_mask="0" * PIECES,
-        started_at=now_iso(),
-        completed_at=None,
-        last_reward_date=None,
-    )
-
-
-def _update_run_mask(run_id: int, mask: str, last_reward_date: str | None):
-    c = conn()
-    cur = c.cursor()
-    cur.execute(
-        """
-        UPDATE puzzle_runs
-        SET unlocked_mask = ?, last_reward_date = ?
-        WHERE id = ?;
-        """,
-        (mask, last_reward_date, run_id),
-    )
-    c.commit()
-    c.close()
-
-
-def _complete_run(run: PuzzleRun):
-    c = conn()
-    cur = c.cursor()
-    cur.execute(
-        """
-        UPDATE puzzle_runs
-        SET completed_at = ?
-        WHERE id = ?;
-        """,
-        (now_iso(), run.id),
-    )
-    # 보관함 저장(이미 있으면 무시)
-    cur.execute(
-        """
-        INSERT OR IGNORE INTO puzzle_collection(user_id, image_key, completed_at)
-        VALUES(?, ?, ?);
-        """,
-        (run.user_id, run.image_key, now_iso()),
-    )
-    c.commit()
-    c.close()
-
-
-def get_collection(user_id: str) -> list[dict]:
-    ensure_puzzle_tables()
-    c = conn()
-    cur = c.cursor()
-    cur.execute(
-        """
-        SELECT image_key, completed_at
-        FROM puzzle_collection
-        WHERE user_id = ?
-        ORDER BY completed_at DESC;
-        """,
-        (user_id,),
-    )
-    rows = cur.fetchall()
-    c.close()
-    out: list[dict] = []
-    for k, t in rows:
-        out.append({"image_key": str(k), "completed_at": str(t)})
-    return out
-
-
-def checkin_eligible(user_id: str, d: date | None = None) -> bool:
-    """A안: 오늘 tasks가 1개라도 있으면 출석 인정"""
-    dd = d or date.today()
     try:
-        df = list_tasks_for_date(user_id, dd)
-        return (df is not None) and (not df.empty)
+        obj = json.loads(raw)
+        return PuzzleState(
+            category=str(obj.get("category") or ""),
+            image_path=str(obj.get("image_path") or ""),
+            progress=int(obj.get("progress") or 0),
+            reveal_order=list(obj.get("reveal_order") or list(range(16))),
+            last_award_date=str(obj.get("last_award_date") or ""),
+            completed=bool(obj.get("completed") or False),
+        )
     except Exception:
-        # 혹시 함수가 내부에서 에러나면 안전하게 false
-        return False
+        return None
 
 
-def reward_piece_if_possible(user_id: str, d: date | None = None) -> tuple[bool, str]:
+def save_state(user_id: str, stt: PuzzleState) -> None:
+    obj: dict[str, Any] = {
+        "category": stt.category,
+        "image_path": stt.image_path,
+        "progress": int(max(0, min(16, stt.progress))),
+        "reveal_order": stt.reveal_order,
+        "last_award_date": stt.last_award_date or "",
+        "completed": bool(stt.completed),
+    }
+    ck_set(_key(user_id), json.dumps(obj, ensure_ascii=False))
+
+
+def start_new_puzzle(user_id: str, category: str) -> PuzzleState:
+    imgs = list_images(category)
+    if not imgs:
+        # 비어있으면 안전하게 더미 상태 반환 (화면에서 에러 메시지 처리)
+        stt = PuzzleState(
+            category=category,
+            image_path="",
+            progress=0,
+            reveal_order=list(range(16)),
+            last_award_date="",
+            completed=False,
+        )
+        save_state(user_id, stt)
+        return stt
+
+    image_path = random.choice(imgs)
+    order = _stable_shuffle_order(os.path.basename(image_path))
+    stt = PuzzleState(
+        category=category,
+        image_path=image_path,
+        progress=0,
+        reveal_order=order,
+        last_award_date="",
+        completed=False,
+    )
+    save_state(user_id, stt)
+    return stt
+
+
+def load_or_init(user_id: str, category_if_new: str = "bunny") -> PuzzleState:
+    stt = load_state(user_id)
+    if stt is None:
+        return start_new_puzzle(user_id, category_if_new)
+    return stt
+
+
+def _add_to_collection_if_new(user_id: str, image_path: str) -> None:
+    raw = ck_get(_collection_key(user_id), "[]")
+    try:
+        arr = json.loads(raw)
+        if not isinstance(arr, list):
+            arr = []
+    except Exception:
+        arr = []
+
+    if image_path and image_path not in arr:
+        arr.append(image_path)
+        ck_set(_collection_key(user_id), json.dumps(arr, ensure_ascii=False))
+
+
+def load_collection(user_id: str) -> list[str]:
+    raw = ck_get(_collection_key(user_id), "[]")
+    try:
+        arr = json.loads(raw)
+        if isinstance(arr, list):
+            return [str(x) for x in arr if str(x)]
+        return []
+    except Exception:
+        return []
+
+
+def award_piece_if_needed(user_id: str) -> tuple[bool, str]:
     """
-    반환: (지급여부, 메시지)
-    - 하루 1개만 지급
-    - 동시에 1개 퍼즐만 진행
+    planner에서 기록 이벤트 발생 시 호출.
+    - 하루 1회만 지급
+    - 진행 중 퍼즐이 있을 때만 지급
     """
-    dd = d or date.today()
-    today = _today_iso(dd)
+    stt = load_state(user_id)
+    if stt is None:
+        return (False, "no_puzzle")
 
-    run = get_active_run(user_id)
-    if not run:
-        return False, "진행 중인 퍼즐이 없어요. 먼저 퍼즐을 시작해 주세요."
+    if not stt.image_path:
+        return (False, "no_image")
 
-    if not checkin_eligible(user_id, dd):
-        return False, "오늘 아직 기록이 없어요. Planner에서 항목을 하나라도 추가하면 조각을 받을 수 있어요."
+    if stt.progress >= 16 or stt.completed:
+        return (False, "already_completed")
 
-    if run.last_reward_date == today:
-        return False, "오늘 조각은 이미 받았어요. 내일 또 받을 수 있어요."
+    today = date.today().isoformat()
+    if stt.last_award_date == today:
+        return (False, "already_awarded_today")
 
-    mask = list(run.unlocked_mask)
-    locked = [i for i, ch in enumerate(mask) if ch == "0"]
-    if not locked:
-        # 이미 완성 상태인데 completed_at만 안찍힌 케이스 방지
-        _complete_run(run)
-        return False, "이미 퍼즐이 완성돼 있어요! 보관함을 확인해 주세요."
+    stt.progress = min(16, stt.progress + 1)
+    stt.last_award_date = today
 
-    # 조각 선택: 랜덤(더 게임같음)
-    idx = random.choice(locked)
-    mask[idx] = "1"
-    new_mask = "".join(mask)
+    if stt.progress >= 16:
+        stt.completed = True
+        _add_to_collection_if_new(user_id, stt.image_path)
 
-    _update_run_mask(run.id, new_mask, today)
-
-    # 완성 체크
-    if "0" not in new_mask:
-        run.unlocked_mask = new_mask
-        _complete_run(run)
-        return True, "🎉 퍼즐 완성! 보관함에 저장했어요."
-
-    return True, "🧩 퍼즐 조각 1개를 받았어요!"
-
-
-def _asset_path_by_key(image_key: str) -> Path | None:
-    for a in get_animal_assets():
-        if a.key == image_key:
-            return a.path
-    return None
-
-
-def _crop_to_square(im: Image.Image) -> Image.Image:
-    w, h = im.size
-    side = min(w, h)
-    left = (w - side) // 2
-    top = (h - side) // 2
-    return im.crop((left, top, left + side, top + side))
-
-
-def build_puzzle_tiles_png_bytes(image_key: str, size: int = 720) -> list[bytes]:
-    """
-    이미지 -> 정사각 크롭 -> resize -> 4x4 타일 -> PNG bytes list (16개)
-    """
-    p = _asset_path_by_key(image_key)
-    if p is None or (not p.exists()):
-        raise FileNotFoundError(f"Puzzle asset not found for key={image_key}")
-
-    im = Image.open(p).convert("RGB")
-    im = _crop_to_square(im)
-    im = im.resize((size, size))
-
-    tile = size // GRID
-    tiles: list[bytes] = []
-
-    for r in range(GRID):
-        for c in range(GRID):
-            x0 = c * tile
-            y0 = r * tile
-            x1 = x0 + tile
-            y1 = y0 + tile
-            piece = im.crop((x0, y0, x1, y1))
-
-            buf = BytesIO()
-            piece.save(buf, format="PNG")
-            tiles.append(buf.getvalue())
-
-    return tiles
+    save_state(user_id, stt)
+    return (True, "awarded")
