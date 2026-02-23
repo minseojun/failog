@@ -57,7 +57,7 @@ def screen_puzzle(user_id: str):
             "동물 카테고리",
             options=CATEGORIES,
             index=0,
-            format_func=lambda x: {"bunny": "🐰 토끼", "guinea": "🐹 기니피그", "puppy": "🐶 강아지", "seal": "🦭 물범"}.get(x, x),
+            format_func=lambda x: {"bunny": "bunny", "guinea": "guinea", "puppy": "puppy", "seal": "seal"}.get(x, x),
             key="puzzle_cat",
         )
 
