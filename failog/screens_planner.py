@@ -1,7 +1,7 @@
 # failog/screens_planner.py
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 
@@ -38,14 +38,22 @@ from failog.consent import consent_value
 from failog.openai_prefs import effective_openai_key, effective_openai_model
 from failog.coaching import llm_plan_alternatives
 
-from failog.puzzle import award_piece_if_needed  # ✅ 자동 지급
+# ✅ 퍼즐 자동 지급
+from failog.puzzle import award_piece_if_eligible
 
 
-def _award_piece_toast_if_any(user_id: str):
-    ok, why = award_piece_if_needed(user_id)
-    if ok:
-        st.toast("🧩 퍼즐 조각 +1 (오늘의 기록 보상)", icon="🧩")
-    return ok, why
+def _maybe_award_puzzle(user_id: str, selected: date):
+    """오늘 날짜에 기록을 남긴 경우 자동으로 퍼즐 조각 지급."""
+    today = datetime.now(KST).date()
+    if selected != today:
+        return
+    try:
+        awarded, msg = award_piece_if_eligible(user_id, today)
+        if awarded:
+            st.toast("🧩 퍼즐 조각 1개가 공개됐어요!", icon="🧩")
+    except Exception:
+        # 퍼즐 기능이 아직 시작되지 않은 유저도 있으니 조용히 무시(에러로 앱 죽이지 않기)
+        pass
 
 
 def screen_planner(user_id: str):
@@ -54,6 +62,7 @@ def screen_planner(user_id: str):
     selected: date = st.session_state["selected_date"]
 
     inject_css(today=date.today(), selected=selected)
+
     st.markdown("<div class='section-title tight'>Planner</div>", unsafe_allow_html=True)
 
     if st_autorefresh is not None:
@@ -62,7 +71,7 @@ def screen_planner(user_id: str):
     ws = week_start(selected)
     ensure_week_habit_tasks(user_id, ws)
 
-    # Reminder
+    # Reminder settings
     en = (ck_get("failog_rem_enabled", "true").lower() == "true")
     rt_str = ck_get("failog_rem_time", "21:30")
     win_str = ck_get("failog_rem_win", "15")
@@ -97,13 +106,11 @@ def screen_planner(user_id: str):
                         m -= 1
                     st.session_state["selected_date"] = date(y, m, 1)
                     st.rerun()
-
             with nav[1]:
                 st.markdown(
                     f"<div style='text-align:center; font-weight:900; font-size:1.05rem;'>{y}.{m:02d}</div>",
                     unsafe_allow_html=True,
                 )
-
             with nav[2]:
                 if st.button("▶", use_container_width=True, key="m_next"):
                     if m == 12:
@@ -163,10 +170,7 @@ def screen_planner(user_id: str):
                 unsafe_allow_html=True,
             )
 
-            # -------------------------
-            # Plan add + Risk preview + AI rewrite
-            # (추천 전략은 제거)
-            # -------------------------
+            # Plan add + Risk preview
             with st.form("plan_add_form", clear_on_submit=False):
                 c1, c2, c3 = st.columns([4, 1.2, 1.2])
                 with c1:
@@ -183,11 +187,11 @@ def screen_planner(user_id: str):
             if preview:
                 rr = risk_score_plan(user_id, selected, plan_text)
                 st.session_state["__plan_risk__"] = {
-                    "text": (plan_text or ""),
+                    "text": plan_text,
                     "date": selected.isoformat(),
-                    "score": int(getattr(rr, "score", 0)),
-                    "reasons": list(getattr(rr, "reasons", []) or []),
-                    "stats": dict(getattr(rr, "stats", {}) or {}),
+                    "score": int(getattr(rr, "score", 0) or 0),
+                    "reasons": getattr(rr, "reasons", []) or [],
+                    "stats": getattr(rr, "stats", {}) or {},
                     "trigger": bool(getattr(rr, "repeated_trigger", False)),
                 }
                 st.session_state.pop("__ai_plan_alt__", None)
@@ -202,10 +206,8 @@ def screen_planner(user_id: str):
             if pr:
                 st.markdown("<hr/>", unsafe_allow_html=True)
                 st.write(f"**위험도 점수: {pr['score']}/100**")
-                for r in (pr.get("reasons") or [])[:4]:
-                    st.write(f"- {r}")
 
-                # AI rewrite/alternatives
+                # AI 대안(Rewrite 중심)
                 if consent_value():
                     api_key = effective_openai_key()
                     model = effective_openai_model()
@@ -218,7 +220,7 @@ def screen_planner(user_id: str):
                                 "recent_stats": pr.get("stats", {}),
                             }
                             try:
-                                with st.spinner("AI 생성 중..."):
+                                with st.spinner("AI Rewrite 생성 중..."):
                                     out = llm_plan_alternatives(api_key, model, ctx)
                                 st.session_state["__ai_plan_alt__"] = out
                             except Exception as e:
@@ -237,24 +239,21 @@ def screen_planner(user_id: str):
                                 key=f"save_ai_rewrite_{selected.isoformat()}",
                             ):
                                 add_plan_task(user_id, selected, rw)
-                                _award_piece_toast_if_any(user_id)  # ✅ plan 추가이므로 지급 조건(b) 충족
+                                _maybe_award_puzzle(user_id, selected)  # ✅ 저장하면 자동 지급
                                 st.session_state.pop("__plan_risk__", None)
                                 st.session_state.pop("__ai_plan_alt__", None)
                                 st.success("Rewrite로 저장했어요.")
                                 st.rerun()
-                        else:
-                            st.caption("AI 결과가 비어 있어요. 다시 시도해 주세요.")
 
+            # 그냥 추가(원문 저장)
             if submitted:
                 add_plan_task(user_id, selected, plan_text)
-                _award_piece_toast_if_any(user_id)  # ✅ plan 추가 -> 지급
+                _maybe_award_puzzle(user_id, selected)  # ✅ 기록 추가하면 자동 지급
                 st.session_state.pop("__plan_risk__", None)
                 st.session_state.pop("__ai_plan_alt__", None)
                 st.rerun()
 
-            # -------------------------
             # Habit manager
-            # -------------------------
             with st.expander("습관(반복) 관리", expanded=False):
                 with st.form("habit_add_form", clear_on_submit=True):
                     hc1, hc2 = st.columns([3, 2])
@@ -274,6 +273,7 @@ def screen_planner(user_id: str):
                     if habit_submit:
                         add_habit(user_id, habit_title, picked)
                         ensure_week_habit_tasks(user_id, week_start(selected))
+                        _maybe_award_puzzle(user_id, selected)  # ✅ 오늘 습관 추가도 “기록”으로 인정
                         st.success("습관을 저장했어요.")
                         st.rerun()
 
@@ -314,28 +314,25 @@ def screen_planner(user_id: str):
                             with x1:
                                 if st.button("성공", key=f"hab_s_{task_id}", use_container_width=True):
                                     update_task_status(user_id, task_id, "success")
-                                    _award_piece_toast_if_any(user_id)  # ✅ 성공 체크 -> 지급
+                                    _maybe_award_puzzle(user_id, selected)  # ✅ 성공 체크도 기록으로 인정
                                     st.session_state.pop(f"hab_show_fail_{task_id}", None)
                                     st.rerun()
                             with x2:
                                 if st.button("실패", key=f"hab_f_{task_id}", use_container_width=True):
-                                    update_task_status(user_id, task_id, "fail")
-                                    _award_piece_toast_if_any(user_id)  # ✅ 실패 체크 -> 지급
                                     st.session_state[f"hab_show_fail_{task_id}"] = True
-                                    st.rerun()
                             with x3:
                                 if st.button("삭제", key=f"hab_del_task_{task_id}", use_container_width=True):
                                     delete_task(user_id, task_id)
                                     st.session_state.pop(f"hab_show_fail_{task_id}", None)
                                     st.rerun()
 
-                            # 실패 원인 저장은 (b까지만) 조건에서 제외 -> 퍼즐 조각 지급 안 함
                             if st.session_state.get(f"hab_show_fail_{task_id}", False):
                                 r_in = st.text_input("실패 원인", value=t_reason, key=f"hab_reason_{task_id}")
                                 y1, y2 = st.columns([1, 4], gap="small")
                                 with y1:
                                     if st.button("원인 저장", key=f"hab_reason_save_{task_id}", use_container_width=True):
                                         update_task_fail(user_id, task_id, r_in)
+                                        _maybe_award_puzzle(user_id, selected)  # ✅ 원인 기록도 기록으로 인정
                                         st.session_state[f"hab_show_fail_{task_id}"] = False
                                         st.rerun()
                                 with y2:
@@ -370,16 +367,13 @@ def screen_planner(user_id: str):
                     with top[1]:
                         if st.button("성공", key=f"s_{tid}", use_container_width=True):
                             update_task_status(user_id, tid, "success")
-                            _award_piece_toast_if_any(user_id)  # ✅ 성공 체크 -> 지급
+                            _maybe_award_puzzle(user_id, selected)  # ✅ 성공 체크도 기록 인정
                             st.session_state.pop(f"show_fail_{tid}", None)
                             st.rerun()
 
                     with top[2]:
                         if st.button("실패", key=f"f_{tid}", use_container_width=True):
-                            update_task_status(user_id, tid, "fail")
-                            _award_piece_toast_if_any(user_id)  # ✅ 실패 체크 -> 지급
                             st.session_state[f"show_fail_{tid}"] = True
-                            st.rerun()
 
                     with top[3]:
                         if st.button("삭제", key=f"del_{tid}", use_container_width=True):
@@ -387,13 +381,13 @@ def screen_planner(user_id: str):
                             st.session_state.pop(f"show_fail_{tid}", None)
                             st.rerun()
 
-                    # 실패 원인 저장은 지급 제외(b까지만)
                     if st.session_state.get(f"show_fail_{tid}", False):
                         reason_in = st.text_input("실패 원인(한 문장)", value=reason, key=f"r_{tid}")
                         a, b = st.columns([1, 4], gap="small")
                         with a:
                             if st.button("저장", key=f"save_fail_{tid}", use_container_width=True):
                                 update_task_fail(user_id, tid, reason_in)
+                                _maybe_award_puzzle(user_id, selected)  # ✅ 원인 저장도 기록 인정
                                 st.session_state[f"show_fail_{tid}"] = False
                                 st.rerun()
                         with b:
