@@ -66,6 +66,17 @@ def ensure_puzzle_tables():
         """
     )
 
+     # 기존 배포 DB(구버전 스키마) 마이그레이션: 누락 컬럼 보강
+    state_cols = {row[1] for row in cur.execute("PRAGMA table_info(puzzle_state)").fetchall()}
+    if "last_award_date" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN last_award_date TEXT")
+    if "completed_at" not in state_cols:
+        cur.execute("ALTER TABLE puzzle_state ADD COLUMN completed_at TEXT")
+
+    gallery_cols = {row[1] for row in cur.execute("PRAGMA table_info(puzzle_gallery)").fetchall()}
+    if "completed_at" not in gallery_cols:
+        cur.execute("ALTER TABLE puzzle_gallery ADD COLUMN completed_at TEXT")
+        
     c.commit()
     c.close()
 
