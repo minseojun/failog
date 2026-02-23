@@ -38,15 +38,22 @@ from failog.consent import consent_value
 from failog.openai_prefs import effective_openai_key, effective_openai_model
 from failog.coaching import llm_plan_alternatives
 
+from failog.puzzle import award_piece_if_needed  # ✅ 자동 지급
+
+
+def _award_piece_toast_if_any(user_id: str):
+    ok, why = award_piece_if_needed(user_id)
+    if ok:
+        st.toast("🧩 퍼즐 조각 +1 (오늘의 기록 보상)", icon="🧩")
+    return ok, why
+
 
 def screen_planner(user_id: str):
     if "selected_date" not in st.session_state:
         st.session_state["selected_date"] = date.today()
     selected: date = st.session_state["selected_date"]
 
-    # dynamic CSS for today/selected calendar cells
     inject_css(today=date.today(), selected=selected)
-
     st.markdown("<div class='section-title tight'>Planner</div>", unsafe_allow_html=True)
 
     if st_autorefresh is not None:
@@ -55,7 +62,7 @@ def screen_planner(user_id: str):
     ws = week_start(selected)
     ensure_week_habit_tasks(user_id, ws)
 
-    # Reminder settings
+    # Reminder
     en = (ck_get("failog_rem_enabled", "true").lower() == "true")
     rt_str = ck_get("failog_rem_time", "21:30")
     win_str = ck_get("failog_rem_win", "15")
@@ -70,11 +77,10 @@ def screen_planner(user_id: str):
         if todos > 0:
             st.toast(f"⏰ 아직 체크하지 않은 항목이 {todos}개 있어요", icon="⏰")
 
-    # widen calendar area: left column bigger
     left, right = st.columns([1.35, 1.65], gap="large")
 
     # =========================
-    # LEFT: Month + reminder + weather
+    # LEFT
     # =========================
     with left:
         with st.container(border=True):
@@ -91,11 +97,13 @@ def screen_planner(user_id: str):
                         m -= 1
                     st.session_state["selected_date"] = date(y, m, 1)
                     st.rerun()
+
             with nav[1]:
                 st.markdown(
                     f"<div style='text-align:center; font-weight:900; font-size:1.05rem;'>{y}.{m:02d}</div>",
                     unsafe_allow_html=True,
                 )
+
             with nav[2]:
                 if st.button("▶", use_container_width=True, key="m_next"):
                     if m == 12:
@@ -123,13 +131,12 @@ def screen_planner(user_id: str):
                         cols[i].markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
                         continue
 
-                    label = str(d.day)  # 숫자만: 줄바꿈 방지
-
+                    label = str(d.day)
                     if cols[i].button(label, key=f"cal_{d.isoformat()}", use_container_width=True):
                         st.session_state["selected_date"] = d
                         st.rerun()
 
-            st.markdown("</div>", unsafe_allow_html=True)  # cal-grid
+            st.markdown("</div>", unsafe_allow_html=True)
 
         with st.expander("알림 설정", expanded=False):
             en_ui = st.toggle("리마인더 켜기", value=en, key="rem_en_ui")
@@ -142,11 +149,10 @@ def screen_planner(user_id: str):
                 st.success("저장됐어요.")
 
         with st.container(border=True):
-            # weather_card 내부에서 제목 스타일을 네가 바꾸고 싶다면 weather.py쪽에서 section_title로 바꾸는 게 베스트
             weather_card(selected)
 
     # =========================
-    # RIGHT: Selected Day tasks & habit manager
+    # RIGHT
     # =========================
     with right:
         with st.container(border=True):
@@ -158,7 +164,8 @@ def screen_planner(user_id: str):
             )
 
             # -------------------------
-            # Plan add + Risk preview + AI Rewrite only
+            # Plan add + Risk preview + AI rewrite
+            # (추천 전략은 제거)
             # -------------------------
             with st.form("plan_add_form", clear_on_submit=False):
                 c1, c2, c3 = st.columns([4, 1.2, 1.2])
@@ -173,71 +180,45 @@ def screen_planner(user_id: str):
                 with c3:
                     submitted = st.form_submit_button("추가", use_container_width=True)
 
-            # --- 위험도 프리뷰 ---
             if preview:
                 rr = risk_score_plan(user_id, selected, plan_text)
-
-                # rr가 어떤 타입이든 안전하게 뽑기
-                score = int(getattr(rr, "score", 0) or 0)
-                reasons = getattr(rr, "reasons", []) or []
-                stats = getattr(rr, "stats", {}) or {}
-                repeated_trigger = bool(getattr(rr, "repeated_trigger", False))
-
-                # (선택) risk 모델이 제공하면 표시용으로 저장
-                ai_score = getattr(rr, "ai_score", None)
-                pattern_score = getattr(rr, "pattern_score", None)
-
                 st.session_state["__plan_risk__"] = {
-                    "text": (plan_text or "").strip(),
+                    "text": (plan_text or ""),
                     "date": selected.isoformat(),
-                    "score": score,
-                    "reasons": reasons,
-                    "stats": stats,
-                    "trigger": repeated_trigger,
-                    "ai_score": ai_score,
-                    "pattern_score": pattern_score,
+                    "score": int(getattr(rr, "score", 0)),
+                    "reasons": list(getattr(rr, "reasons", []) or []),
+                    "stats": dict(getattr(rr, "stats", {}) or {}),
+                    "trigger": bool(getattr(rr, "repeated_trigger", False)),
                 }
-                # 프리뷰 새로 만들면 AI 결과는 초기화
                 st.session_state.pop("__ai_plan_alt__", None)
 
             pr = st.session_state.get("__plan_risk__")
-
             if pr:
-                # 입력이 바뀌면 프리뷰 무효화(혼동 방지)
                 if (pr.get("text") or "").strip() != (plan_text or "").strip() or pr.get("date") != selected.isoformat():
                     st.session_state.pop("__plan_risk__", None)
                     st.session_state.pop("__ai_plan_alt__", None)
                     pr = None
 
-            # --- 프리뷰 표시 + AI Rewrite (only) ---
             if pr:
                 st.markdown("<hr/>", unsafe_allow_html=True)
-                st.write(f"**위험도 점수: {int(pr.get('score', 0))}/100**")
-
-                # 이유(최대 4개)
+                st.write(f"**위험도 점수: {pr['score']}/100**")
                 for r in (pr.get("reasons") or [])[:4]:
                     st.write(f"- {r}")
 
-                # (있으면) AI/패턴 분해 표시
-                if pr.get("ai_score") is not None or pr.get("pattern_score") is not None:
-                    st.caption(
-                        f"(AI 실행가능성 평가: {pr.get('ai_score', '—')} / 패턴 기반: {pr.get('pattern_score', '—')})"
-                    )
-
-                # AI Rewrite 버튼 (동의 + 키 있을 때만)
+                # AI rewrite/alternatives
                 if consent_value():
                     api_key = effective_openai_key()
                     model = effective_openai_model()
                     if api_key:
-                        if st.button("AI Rewrite 받기", use_container_width=True, key="ai_rewrite_btn"):
+                        if st.button("AI Rewrite 받기", use_container_width=True, key="ai_alt_btn"):
                             ctx = {
                                 "plan_text": (plan_text or "").strip(),
-                                "risk_score": int(pr.get("score", 0)),
+                                "risk_score": int(pr["score"]),
                                 "risk_reasons": pr.get("reasons", []),
                                 "recent_stats": pr.get("stats", {}),
                             }
                             try:
-                                with st.spinner("AI Rewrite 생성 중..."):
+                                with st.spinner("AI 생성 중..."):
                                     out = llm_plan_alternatives(api_key, model, ctx)
                                 st.session_state["__ai_plan_alt__"] = out
                             except Exception as e:
@@ -245,28 +226,28 @@ def screen_planner(user_id: str):
 
                 out = st.session_state.get("__ai_plan_alt__")
                 if out:
-                    rw = (out.get("rewrite") or "").strip()
-                    if rw:
-                        with st.container(border=True):
-                            st.write("**AI Rewrite (추천)**")
+                    with st.container(border=True):
+                        rw = (out.get("rewrite") or "").strip()
+                        if rw:
+                            st.write("**AI rewrite(추천 1개)**")
                             st.write(f"- {rw}")
-
                             if st.button(
                                 "Rewrite로 저장",
                                 use_container_width=True,
                                 key=f"save_ai_rewrite_{selected.isoformat()}",
                             ):
                                 add_plan_task(user_id, selected, rw)
+                                _award_piece_toast_if_any(user_id)  # ✅ plan 추가이므로 지급 조건(b) 충족
                                 st.session_state.pop("__plan_risk__", None)
                                 st.session_state.pop("__ai_plan_alt__", None)
                                 st.success("Rewrite로 저장했어요.")
                                 st.rerun()
-                    else:
-                        st.caption("AI Rewrite 결과가 비어 있어요. 다시 시도해 주세요.")
+                        else:
+                            st.caption("AI 결과가 비어 있어요. 다시 시도해 주세요.")
 
-            # --- 기존 그대로: 그냥 추가(원문 저장) ---
             if submitted:
                 add_plan_task(user_id, selected, plan_text)
+                _award_piece_toast_if_any(user_id)  # ✅ plan 추가 -> 지급
                 st.session_state.pop("__plan_risk__", None)
                 st.session_state.pop("__ai_plan_alt__", None)
                 st.rerun()
@@ -333,17 +314,22 @@ def screen_planner(user_id: str):
                             with x1:
                                 if st.button("성공", key=f"hab_s_{task_id}", use_container_width=True):
                                     update_task_status(user_id, task_id, "success")
+                                    _award_piece_toast_if_any(user_id)  # ✅ 성공 체크 -> 지급
                                     st.session_state.pop(f"hab_show_fail_{task_id}", None)
                                     st.rerun()
                             with x2:
                                 if st.button("실패", key=f"hab_f_{task_id}", use_container_width=True):
+                                    update_task_status(user_id, task_id, "fail")
+                                    _award_piece_toast_if_any(user_id)  # ✅ 실패 체크 -> 지급
                                     st.session_state[f"hab_show_fail_{task_id}"] = True
+                                    st.rerun()
                             with x3:
                                 if st.button("삭제", key=f"hab_del_task_{task_id}", use_container_width=True):
                                     delete_task(user_id, task_id)
                                     st.session_state.pop(f"hab_show_fail_{task_id}", None)
                                     st.rerun()
 
+                            # 실패 원인 저장은 (b까지만) 조건에서 제외 -> 퍼즐 조각 지급 안 함
                             if st.session_state.get(f"hab_show_fail_{task_id}", False):
                                 r_in = st.text_input("실패 원인", value=t_reason, key=f"hab_reason_{task_id}")
                                 y1, y2 = st.columns([1, 4], gap="small")
@@ -384,12 +370,16 @@ def screen_planner(user_id: str):
                     with top[1]:
                         if st.button("성공", key=f"s_{tid}", use_container_width=True):
                             update_task_status(user_id, tid, "success")
+                            _award_piece_toast_if_any(user_id)  # ✅ 성공 체크 -> 지급
                             st.session_state.pop(f"show_fail_{tid}", None)
                             st.rerun()
 
                     with top[2]:
                         if st.button("실패", key=f"f_{tid}", use_container_width=True):
+                            update_task_status(user_id, tid, "fail")
+                            _award_piece_toast_if_any(user_id)  # ✅ 실패 체크 -> 지급
                             st.session_state[f"show_fail_{tid}"] = True
+                            st.rerun()
 
                     with top[3]:
                         if st.button("삭제", key=f"del_{tid}", use_container_width=True):
@@ -397,6 +387,7 @@ def screen_planner(user_id: str):
                             st.session_state.pop(f"show_fail_{tid}", None)
                             st.rerun()
 
+                    # 실패 원인 저장은 지급 제외(b까지만)
                     if st.session_state.get(f"show_fail_{tid}", False):
                         reason_in = st.text_input("실패 원인(한 문장)", value=reason, key=f"r_{tid}")
                         a, b = st.columns([1, 4], gap="small")
