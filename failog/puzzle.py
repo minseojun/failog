@@ -2,262 +2,259 @@
 from __future__ import annotations
 
 import json
-import os
 import random
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
+from pathlib import Path
 from typing import List, Optional, Tuple
 
-from PIL import Image
-
-from failog.constants import KST
 from failog.db import conn, now_iso
 
+ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets" / "animals"  # /mount/src/failog/assets/animals
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ASSETS_DIR = os.path.join(BASE_DIR, "assets", "animals")
 
 CATEGORIES = ["bunny", "guinea", "puppy", "seal"]
 
-CATEGORY_FILES = {
-    "bunny": ["bunny1.jpeg", "bunny2.jpeg", "bunny3.jpeg", "bunny4.jpeg"],
-    "guinea": ["guinea1.jpeg", "guinea2.jpeg", "guinea3.jpeg"],
-    "puppy": ["puppy1.jpeg", "puppy2.jpeg", "puppy3.jpeg"],
-    "seal": ["seal1.jpeg", "seal2.jpeg"],
-}
+
+def _list_category_images(category: str) -> List[Path]:
+    """
+    ✅ 너 레포 구조(assets/animals/bunny1.jpeg ...)에 맞춰서
+    prefix로 파일을 고른다.
+    """
+    category = (category or "").strip().lower()
+    if category not in CATEGORIES:
+        return []
+
+    if not ASSETS_DIR.exists():
+        return []
+
+    exts = {".jpg", ".jpeg", ".png", ".webp"}
+    imgs = []
+    for p in ASSETS_DIR.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in exts:
+            continue
+        # bunny1.jpeg 같은 prefix 매칭
+        if p.name.lower().startswith(category):
+            imgs.append(p)
+
+    imgs.sort()
+    return imgs
 
 
-@dataclass
-class PuzzleState:
-    user_id: str
-    category: str
-    image_path: str
-    reveal_order: List[int]      # length 16
-    revealed_mask: str           # length 16, '0'/'1'
-    last_award_date: Optional[str]
-
-
-def _today_kst() -> date:
-    return datetime.now(KST).date()
-
-
-def _mask_count(mask: str) -> int:
-    return sum(1 for ch in (mask or "") if ch == "1")
-
-
-def _all_assets_exist(category: str) -> List[str]:
-    files = CATEGORY_FILES.get(category, [])
-    return [os.path.join(ASSETS_DIR, category, fn) for fn in files]
-
-
-def pick_random_image_path(user_id: str, category: str) -> str:
-    paths = _all_assets_exist(category)
-    existing = [p for p in paths if os.path.exists(p)]
-    if not existing:
-        raise FileNotFoundError(
-            f"assets/animals/{category} 에 이미지가 없어요. "
-            f"경로 확인: {os.path.join(ASSETS_DIR, category)}"
-        )
-
-    seed = abs(hash(f"{user_id}:{category}:image")) % (2**31 - 1)
-    rng = random.Random(seed)
-    return rng.choice(existing)
-
-
-def create_new_puzzle(user_id: str, category: str) -> PuzzleState:
-    image_path = pick_random_image_path(user_id, category)
-
-    seed = abs(hash(f"{user_id}:{category}:{image_path}:order")) % (2**31 - 1)
-    rng = random.Random(seed)
-    order = list(range(16))
-    rng.shuffle(order)
-
-    mask = "0" * 16
-    ts = now_iso()
-
+def init_puzzle_tables():
     c = conn()
-    cur = c.cursor()
-    cur.execute(
+    c.execute(
         """
-        INSERT OR REPLACE INTO puzzle_state
-        (user_id, category, image_path, reveal_order, revealed_mask, last_award_date, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """,
-        (user_id, category, image_path, json.dumps(order), mask, None, ts, ts),
+        CREATE TABLE IF NOT EXISTS puzzle_progress (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          category TEXT NOT NULL,
+          image_file TEXT NOT NULL,
+          order_json TEXT NOT NULL,
+          revealed_count INTEGER NOT NULL DEFAULT 0,
+          last_reward_date TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(user_id)
+        );
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS puzzle_gallery (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          category TEXT NOT NULL,
+          image_file TEXT NOT NULL,
+          completed_at TEXT NOT NULL
+        );
+        """
     )
     c.commit()
     c.close()
 
-    return PuzzleState(
-        user_id=user_id,
-        category=category,
-        image_path=image_path,
-        reveal_order=order,
-        revealed_mask=mask,
-        last_award_date=None,
-    )
 
+def get_or_create_progress(user_id: str, category: str) -> Tuple[Optional[dict], str]:
+    """
+    선택한 category로 퍼즐 진행상태를 보장해서 가져온다.
+    - 이미 progress가 있으면 그걸 반환
+    - 없으면 이미지 랜덤 선택 + 공개순서 랜덤 생성 후 생성
+    """
+    category = (category or "").strip().lower()
+    if category not in CATEGORIES:
+        return None, "카테고리가 올바르지 않아요."
 
-def load_puzzle_state(user_id: str) -> Optional[PuzzleState]:
+    imgs = _list_category_images(category)
+    if not imgs:
+        return None, f"assets/animals 에서 '{category}*.jpeg' 이미지를 찾지 못했어요."
+
     c = conn()
-    cur = c.cursor()
-    cur.execute(
-        """
-        SELECT user_id, category, image_path, reveal_order, revealed_mask, last_award_date
-        FROM puzzle_state
-        WHERE user_id = ?;
-        """,
+    row = c.execute(
+        "SELECT user_id, category, image_file, order_json, revealed_count, last_reward_date FROM puzzle_progress WHERE user_id=?",
         (user_id,),
-    )
-    row = cur.fetchone()
-    c.close()
+    ).fetchone()
 
-    if not row:
-        return None
+    if row:
+        progress = {
+            "user_id": row[0],
+            "category": row[1],
+            "image_file": row[2],
+            "order": json.loads(row[3]),
+            "revealed_count": int(row[4]),
+            "last_reward_date": row[5],
+        }
+        c.close()
+        return progress, "OK"
 
-    order = json.loads(row[3]) if row[3] else list(range(16))
-    mask = row[4] or ("0" * 16)
-    return PuzzleState(
-        user_id=row[0],
-        category=row[1],
-        image_path=row[2],
-        reveal_order=order,
-        revealed_mask=mask,
-        last_award_date=row[5],
-    )
+    # 없으면 새로 생성
+    chosen = random.choice(imgs)
+    order = list(range(16))
+    random.shuffle(order)
 
-
-def _save_state(ps: PuzzleState):
-    ts = now_iso()
-    c = conn()
-    cur = c.cursor()
-    cur.execute(
+    c.execute(
         """
-        UPDATE puzzle_state
-        SET revealed_mask = ?, last_award_date = ?, updated_at = ?
-        WHERE user_id = ?;
+        INSERT INTO puzzle_progress(user_id, category, image_file, order_json, revealed_count, last_reward_date, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
         """,
-        (ps.revealed_mask, ps.last_award_date, ts, ps.user_id),
+        (
+            user_id,
+            category,
+            str(chosen),
+            json.dumps(order, ensure_ascii=False),
+            0,
+            None,
+            now_iso(),
+            now_iso(),
+        ),
     )
     c.commit()
     c.close()
 
+    progress = {
+        "user_id": user_id,
+        "category": category,
+        "image_file": str(chosen),
+        "order": order,
+        "revealed_count": 0,
+        "last_reward_date": None,
+    }
+    return progress, "OK"
 
-def user_has_activity_today(user_id: str, d: date) -> bool:
-    """
-    ✅ 출석/기록 기준을 'task_date=오늘'이 아니라,
-    '오늘(created_at/updated_at)에 무언가 기록/수정이 있었는지'로 잡음.
 
-    - 계획 추가: created_at 오늘
-    - 성공/실패 체크: updated_at 오늘
-    - 실패원인 저장: updated_at 오늘
-    - (선택날짜가 과거여도) 오늘 앱에서 기록하면 출석 인정
+def set_category(user_id: str, category: str) -> Tuple[Optional[dict], str]:
     """
-    iso = d.isoformat()
+    카테고리 바꾸면 진행은 새로 시작(보상 컨셉상 자연스러움).
+    """
+    category = (category or "").strip().lower()
+    imgs = _list_category_images(category)
+    if not imgs:
+        return None, f"assets/animals 에서 '{category}*.jpeg' 이미지를 찾지 못했어요."
+
+    chosen = random.choice(imgs)
+    order = list(range(16))
+    random.shuffle(order)
 
     c = conn()
-    cur = c.cursor()
-    cur.execute(
+    c.execute("DELETE FROM puzzle_progress WHERE user_id=?", (user_id,))
+    c.execute(
         """
-        SELECT COUNT(1)
-        FROM tasks
-        WHERE user_id = ?
-          AND (
-            substr(created_at, 1, 10) = ?
-            OR substr(updated_at, 1, 10) = ?
-          );
+        INSERT INTO puzzle_progress(user_id, category, image_file, order_json, revealed_count, last_reward_date, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
         """,
-        (user_id, iso, iso),
+        (user_id, category, str(chosen), json.dumps(order, ensure_ascii=False), 0, None, now_iso(), now_iso()),
     )
-    n = int(cur.fetchone()[0] or 0)
+    c.commit()
     c.close()
-    return n > 0
+
+    return get_or_create_progress(user_id, category)
 
 
-def award_piece_if_eligible(user_id: str, d: Optional[date] = None) -> Tuple[bool, str]:
+def _has_user_logged_today(user_id: str) -> bool:
     """
-    ✅ 하루 1번, '오늘 활동이 있으면' 퍼즐 조각 1개 자동 공개.
+    ✅ '오늘 기록 남김' 판정(자동 지급용)
+    - 오늘 날짜(task_date=today)에
+      - plan 항목이 하나라도 있거나
+      - habit/plan 중 success/fail로 체크한 게 하나라도 있으면 True
     """
-    d = d or _today_kst()
-    today_iso = d.isoformat()
+    today = date.today().isoformat()
+    c = conn()
+    row = c.execute(
+        """
+        SELECT COUNT(*)
+        FROM tasks
+        WHERE user_id=?
+          AND task_date=?
+          AND (
+            source='plan'
+            OR status IN ('success','fail')
+          )
+        """,
+        (user_id, today),
+    ).fetchone()
+    c.close()
+    return int(row[0] if row else 0) > 0
 
-    ps = load_puzzle_state(user_id)
-    if not ps:
-        return (False, "퍼즐이 아직 시작되지 않았어요. (카테고리 먼저 선택)")
 
-    if _mask_count(ps.revealed_mask) >= 16:
-        return (False, "이미 퍼즐이 완성됐어요.")
+def try_award_piece(user_id: str) -> Tuple[bool, str]:
+    """
+    오늘 기록이 있으면 자동으로 1조각 지급(하루 1회).
+    """
+    c = conn()
+    row = c.execute(
+        "SELECT category, image_file, order_json, revealed_count, last_reward_date FROM puzzle_progress WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        c.close()
+        return False, "퍼즐이 아직 시작되지 않았어요. (🧩에서 카테고리 선택)"
 
-    # ✅ 오늘 활동이 없으면 지급 안함
-    if not user_has_activity_today(user_id, d):
-        return (False, "오늘 기록/수정 활동이 아직 없어서 조각을 지급하지 않았어요.")
+    category, image_file, order_json, revealed_count, last_reward_date = row
+    revealed_count = int(revealed_count or 0)
+    today = date.today().isoformat()
 
-    # ✅ 오늘 이미 지급했으면 중복 지급 방지
-    if ps.last_award_date == today_iso:
-        return (False, "오늘은 이미 퍼즐 조각을 받았어요.")
+    if last_reward_date == today:
+        c.close()
+        return False, "오늘은 이미 조각을 받았어요."
 
-    mask = list(ps.revealed_mask)
-    next_idx = None
-    for idx in ps.reveal_order:
-        if 0 <= idx < 16 and mask[idx] == "0":
-            next_idx = idx
-            break
+    if not _has_user_logged_today(user_id):
+        c.close()
+        return False, "오늘 기록이 아직 감지되지 않았어요. (계획 추가 또는 성공/실패 체크)"
 
-    if next_idx is None:
-        return (False, "공개할 조각이 없어요(이미 다 공개된 것 같아요).")
+    # 지급
+    revealed_count = min(16, revealed_count + 1)
+    c.execute(
+        "UPDATE puzzle_progress SET revealed_count=?, last_reward_date=?, updated_at=? WHERE user_id=?",
+        (revealed_count, today, now_iso(), user_id),
+    )
+    c.commit()
 
-    mask[next_idx] = "1"
-    ps.revealed_mask = "".join(mask)
-    ps.last_award_date = today_iso
-    _save_state(ps)
-
-    # 완성 시 보관함 저장 + 진행퍼즐 초기화
-    if _mask_count(ps.revealed_mask) >= 16:
-        ts = now_iso()
-        c = conn()
-        cur = c.cursor()
-        cur.execute(
-            """
-            INSERT INTO puzzle_gallery(user_id, category, image_path, completed_on, created_at)
-            VALUES (?, ?, ?, ?, ?);
-            """,
-            (user_id, ps.category, ps.image_path, today_iso, ts),
+    # 완성 처리
+    if revealed_count >= 16:
+        c.execute(
+            "INSERT INTO puzzle_gallery(user_id, category, image_file, completed_at) VALUES (?,?,?,?)",
+            (user_id, category, image_file, now_iso()),
         )
-        cur.execute("DELETE FROM puzzle_state WHERE user_id = ?;", (user_id,))
+        c.execute("DELETE FROM puzzle_progress WHERE user_id=?", (user_id,))
         c.commit()
         c.close()
-        return (True, "퍼즐이 완성됐어요! 🎉 보관함에 저장했어요.")
+        return True, "🎉 퍼즐 완성! 보관함에 추가됐어요."
 
-    return (True, "퍼즐 조각 1개를 공개했어요! 🧩")
+    c.close()
+    return True, "🧩 퍼즐 조각 1개가 공개됐어요!"
 
 
-def get_gallery(user_id: str) -> List[dict]:
+def load_gallery(user_id: str) -> List[dict]:
     c = conn()
-    cur = c.cursor()
-    cur.execute(
+    rows = c.execute(
         """
-        SELECT category, image_path, completed_on
+        SELECT category, image_file, completed_at
         FROM puzzle_gallery
-        WHERE user_id = ?
+        WHERE user_id=?
         ORDER BY id DESC
-        LIMIT 50;
         """,
         (user_id,),
-    )
-    rows = cur.fetchall()
+    ).fetchall()
     c.close()
-
-    return [{"category": cat, "image_path": path, "completed_on": day} for cat, path, day in rows]
-
-
-def slice_image_4x4(image_path: str, size: int = 640) -> List[Image.Image]:
-    img = Image.open(image_path).convert("RGB")
-    img = img.resize((size, size))
-    tile = size // 4
-    pieces: List[Image.Image] = []
-    for r in range(4):
-        for c in range(4):
-            left = c * tile
-            top = r * tile
-            pieces.append(img.crop((left, top, left + tile, top + tile)))
-    return pieces
+    return [{"category": r[0], "image_file": r[1], "completed_at": r[2]} for r in rows]
