@@ -206,6 +206,10 @@ def screen_planner(user_id: str):
                 if reasons:
                     for reason in reasons[:2]:
                         st.write(f"- {reason}")
+                reasons = [str(x).strip() for x in (pr.get("reasons") or []) if str(x).strip()]
+                if reasons:
+                    for reason in reasons[:2]:
+                        st.write(f"- {reason}")
 
                 # AI 대안(Rewrite 중심)
                 if consent_value():
