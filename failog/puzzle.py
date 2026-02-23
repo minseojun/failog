@@ -191,6 +191,18 @@ def _tile_bytes_from_image(image_path_str: str, target_tile_px: int = 160) -> Tu
     im_sq.save(buf0, format="PNG")
     return tiles, buf0.getvalue()
 
+def _table_columns(table_name: str) -> set[str]:
+    c = conn()
+    try:
+        rows = c.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {str(r[1]) for r in rows}
+    finally:
+        c.close()
+
+
+def _revealed_mask_from_list(revealed: List[int]) -> str:
+    on = set(_safe_int_list(revealed))
+    return "".join("1" if i in on else "0" for i in range(TILE_COUNT))
 
 def _tasks_exist_today(user_id: str, d: date) -> bool:
     """오늘 날짜로 task가 하나라도 있으면 '기록했다'로 간주"""
@@ -247,35 +259,60 @@ def load_state(user_id: str) -> Optional[PuzzleState]:
 def save_state(state: PuzzleState):
     ensure_puzzle_tables()
     c = conn()
-    now = now_iso()
-    revealed_json = json.dumps(_safe_int_list(state.revealed), ensure_ascii=False)
+    now = now_iso()    
+    revealed_clean = _safe_int_list(state.revealed)
+    revealed_json = json.dumps(revealed_clean, ensure_ascii=False)
 
-    c.execute(
-        """
+    cols = _table_columns("puzzle_state")
+
+    payload: Dict[str, object] = {
+        "user_id": state.user_id,
+        "category": state.category,
+        "image_path": state.image_path,
+        "seed": int(state.seed),
+        "revealed_json": revealed_json,
+        "last_award_date": state.last_award_date,
+        "created_at": now,
+        "updated_at": now,
+        "completed_at": state.completed_at,
+    }
+
+    # 구스키마 호환 (NOT NULL 제약 컬럼)
+    if "reveal_order" in cols:
+        payload["reveal_order"] = json.dumps(list(range(TILE_COUNT)), ensure_ascii=False)
+    if "revealed_mask" in cols:
+        payload["revealed_mask"] = _revealed_mask_from_list(revealed_clean)
+
+    insert_cols = [
+        "user_id",
+        "category",
+        "image_path",
+        "seed",
+        "revealed_json",
+        "last_award_date",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "reveal_order",
+        "revealed_mask",
+    ]
+    insert_cols = [cname for cname in insert_cols if cname in cols]
+
+    placeholders = ",".join(["?" for _ in insert_cols])
+    values = [payload[cname] for cname in insert_cols]
+
+    update_cols = [cname for cname in insert_cols if cname not in {"user_id", "created_at"}]
+    update_set = ",\n          ".join([f"{cname}=excluded.{cname}" for cname in update_cols])
+
+    sql = f"""
         INSERT INTO puzzle_state
-          (user_id, category, image_path, seed, revealed_json, last_award_date, created_at, updated_at, completed_at)
-        VALUES (?,?,?,?,?,?,?,?,?)
+          ({", ".join(insert_cols)})
+        VALUES ({placeholders})   
         ON CONFLICT(user_id) DO UPDATE SET
-          category=excluded.category,
-          image_path=excluded.image_path,
-          seed=excluded.seed,
-          revealed_json=excluded.revealed_json,
-          last_award_date=excluded.last_award_date,
-          updated_at=excluded.updated_at,
-          completed_at=excluded.completed_at
-        """,
-        (
-            state.user_id,
-            state.category,
-            state.image_path,
-            int(state.seed),
-            revealed_json,
-            state.last_award_date,
-            now,
-            now,
-            state.completed_at,
-        ),
-    )
+                    {update_set}
+        """
+
+    c.execute(sql, values)
     c.commit()
     c.close()
 
@@ -283,13 +320,26 @@ def save_state(state: PuzzleState):
 def add_to_gallery(user_id: str, category: str, image_path: str):
     ensure_puzzle_tables()
     c = conn()
-    c.execute(
-        """
-        INSERT INTO puzzle_gallery(user_id, category, image_path, completed_at)
-        VALUES (?,?,?,?)
-        """,
-        (user_id, category, image_path, now_iso()),
-    )
+    ts = now_iso()
+    cols = _table_columns("puzzle_gallery")
+
+    payload: Dict[str, object] = {
+        "user_id": user_id,
+        "category": category,
+        "image_path": image_path,
+        "completed_at": ts,
+        "completed_on": ts[:10],
+        "created_at": ts,
+    }
+
+    insert_cols = ["user_id", "category", "image_path", "completed_at", "completed_on", "created_at"]
+    insert_cols = [cname for cname in insert_cols if cname in cols]
+
+    placeholders = ",".join(["?" for _ in insert_cols])
+    values = [payload[cname] for cname in insert_cols]
+
+    sql = f"INSERT INTO puzzle_gallery({', '.join(insert_cols)}) VALUES ({placeholders})"
+    c.execute(sql, values)
     c.commit()
     c.close()
 
@@ -297,17 +347,38 @@ def add_to_gallery(user_id: str, category: str, image_path: str):
 def load_gallery(user_id: str) -> List[Dict[str, str]]:
     ensure_puzzle_tables()
     c = conn()
+    cols = _table_columns("puzzle_gallery")
+
+    completed_col = "completed_at" if "completed_at" in cols else ("completed_on" if "completed_on" in cols else None)
+    if completed_col is None:
+        c.close()
+        return []
+
     rows = c.execute(
-        """
-        SELECT category, image_path, completed_at
+        f"""
+        SELECT category, image_path, {completed_col}
         FROM puzzle_gallery
         WHERE user_id=?
-        ORDER BY completed_at DESC, id DESC
+        ORDER BY {completed_col} DESC, id DESC
         """,
         (user_id,),
     ).fetchall()
     c.close()
-    return [{"category": str(a), "image_path": str(b), "completed_at": str(ca)} for a, b, ca in rows]
+    out: List[Dict[str, str]] = []
+    for a, b, ca in rows:
+        ts = str(ca)
+        if completed_col == "completed_on" and len(ts) == 10:
+            ts = f"{ts}T00:00:00"
+        out.append({"category": str(a), "image_path": str(b), "completed_at": ts})
+    return out
+
+
+def get_render_payload(user_id: str) -> Dict[str, object]:
+    """퍼즐 화면 렌더링에 필요한 상태/보관함 데이터를 한 번에 반환."""
+    return {
+        "state": load_state(user_id),
+        "gallery": load_gallery(user_id),
+    }
 
 def get_render_payload(user_id: str) -> Dict[str, object]:
     """퍼즐 화면 렌더링에 필요한 상태/보관함 데이터를 한 번에 반환."""
