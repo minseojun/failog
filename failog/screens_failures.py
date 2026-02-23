@@ -203,79 +203,7 @@ def screen_failures(user_id: str):
     # Weekly analysis / coaching
     # -------------------------
     with tab2:
-        # --- 주간 1개 실험 (Behavioral Experiment) ---
-st.markdown("<hr/>", unsafe_allow_html=True)
 
-section_title("주간 1개 실험 (7일)")
-
-# consent/openai key gate는 tab2에서 이미 하고 있으니 그대로 재사용 가능
-# (tab2 상단에서 api_key/model 확보한 뒤라고 가정)
-
-# 입력 데이터 만들기: 최근 4주 요약 + 패턴 + 시그널 + raw 텍스트
-end4 = ws + timedelta(days=6)
-start4 = ws - timedelta(days=27)  # 4주(28일) 범위
-last4 = get_tasks_range(user_id, start4, end4)
-last4_fail = last4[last4["status"] == "fail"].copy()
-
-recent_texts = (
-    last4_fail["fail_reason"].fillna("").map(lambda s: str(s).strip()).tolist()
-    if not last4_fail.empty
-    else []
-)
-recent_texts = [t for t in recent_texts if t][:24]  # 너무 길면 비용/품질 떨어져서 컷
-
-# 간단 요약(LLM 입력용): 주간 실패 수/원인 상위
-failure_summary = {
-    "range": {"start": start4.isoformat(), "end": end4.isoformat()},
-    "total_tasks": int(len(last4)),
-    "total_failures": int(len(last4_fail)),
-    "top_fail_reasons": (
-        last4_fail["fail_reason"].fillna("").map(lambda s: str(s).strip()).value_counts().head(6).to_dict()
-        if not last4_fail.empty
-        else {}
-    ),
-}
-
-# top_patterns는 "반복 실패" 느낌이 나도록 간단히 구성 (현재 레포 함수들로 더 고급화 가능)
-top_patterns = []
-if not last4_fail.empty:
-    vc = last4_fail["fail_reason"].fillna("").map(lambda s: str(s).strip()).value_counts().head(5)
-    for reason, cnt in vc.items():
-        if reason:
-            top_patterns.append({"pattern": reason, "count": int(cnt)})
-
-signals_28 = compute_user_signals(user_id, days=28)
-
-# 버튼 눌러 생성/갱신
-if st.button("주간 실험 생성/갱신", use_container_width=True, key="weekly_exp_btn"):
-    try:
-        with st.spinner("주간 실험 설계 중..."):
-            exp = llm_weekly_experiment(
-                api_key=api_key,
-                model=model,
-                failure_summary=failure_summary,
-                top_patterns=top_patterns,
-                signals=signals_28,
-                recent_fail_texts=recent_texts,
-            )
-        st.session_state["weekly_experiment"] = exp
-    except Exception as e:
-        st.error(f"주간 실험 생성 실패: {type(e).__name__}")
-
-exp = st.session_state.get("weekly_experiment")
-if exp and isinstance(exp, dict):
-    with st.container(border=True):
-        st.markdown(f"**dominant_pattern**: {exp.get('dominant_pattern','')}")
-        st.markdown(f"**experiment_rule**: {exp.get('experiment_rule','')}")
-        st.markdown(f"**measurement_metric**: {exp.get('measurement_metric','')}")
-        st.markdown(f"**expected_behavioral_shift**: {exp.get('expected_behavioral_shift','')}")
-
-        # 디버그 정보가 있으면(오류 fallback) 조용히 캡션으로만
-        if exp.get("error"):
-            st.caption(f"(debug) {exp.get('error')}")
-else:
-    st.caption("버튼을 누르면 다음 7일 동안 적용할 ‘단 하나의 규칙’이 생성돼요.")     
-        # ✅ 요청: 여기 들어오면 있던 상단 텍스트(헤더) 제거 -> 따로 표기 안함(버튼/결과만)
 
         if not consent_value():
             st.info("AI 기능 사용 동의가 필요해요. (Planner 화면 하단에서 동의)")
@@ -286,7 +214,69 @@ else:
         if not api_key:
             st.info("OpenAI 키가 설정되면 분석/코칭이 표시돼요. (Planner 화면 하단 OpenAI 설정)")
             return
+ # --- 주간 1개 실험 (Behavioral Experiment) ---
+        st.markdown("<hr/>", unsafe_allow_html=True)
+        section_title("주간 1개 실험 (7일)")
 
+        end4 = ws + timedelta(days=6)
+        start4 = ws - timedelta(days=27)  # 4주(28일) 범위
+        last4 = get_tasks_range(user_id, start4, end4)
+        last4_fail = last4[last4["status"] == "fail"].copy()
+
+        recent_texts = (
+            last4_fail["fail_reason"].fillna("").map(lambda s: str(s).strip()).tolist()
+            if not last4_fail.empty
+            else []
+        )
+        recent_texts = [t for t in recent_texts if t][:24]  # 너무 길면 비용/품질 떨어져서 컷
+
+        failure_summary = {
+            "range": {"start": start4.isoformat(), "end": end4.isoformat()},
+            "total_tasks": int(len(last4)),
+            "total_failures": int(len(last4_fail)),
+            "top_fail_reasons": (
+                last4_fail["fail_reason"].fillna("").map(lambda s: str(s).strip()).value_counts().head(6).to_dict()
+                if not last4_fail.empty
+                else {}
+            ),
+        }
+
+        top_patterns = []
+        if not last4_fail.empty:
+            vc = last4_fail["fail_reason"].fillna("").map(lambda s: str(s).strip()).value_counts().head(5)
+            for reason, cnt in vc.items():
+                if reason:
+                    top_patterns.append({"pattern": reason, "count": int(cnt)})
+
+        signals_28 = compute_user_signals(user_id, days=28)
+
+        if st.button("주간 실험 생성/갱신", use_container_width=True, key="weekly_exp_btn"):
+            try:
+                with st.spinner("주간 실험 설계 중..."):
+                    exp = llm_weekly_experiment(
+                        api_key=api_key,
+                        model=model,
+                        failure_summary=failure_summary,
+                        top_patterns=top_patterns,
+                        signals=signals_28,
+                        recent_fail_texts=recent_texts,
+                    )
+                st.session_state["weekly_experiment"] = exp
+            except Exception as e:
+                st.error(f"주간 실험 생성 실패: {type(e).__name__}")
+
+        exp = st.session_state.get("weekly_experiment")
+        if exp and isinstance(exp, dict):
+            with st.container(border=True):
+                st.markdown(f"**dominant_pattern**: {exp.get('dominant_pattern','')}")
+                st.markdown(f"**experiment_rule**: {exp.get('experiment_rule','')}")
+                st.markdown(f"**measurement_metric**: {exp.get('measurement_metric','')}")
+                st.markdown(f"**expected_behavioral_shift**: {exp.get('expected_behavioral_shift','')}")
+
+                if exp.get("error"):
+                    st.caption(f"(debug) {exp.get('error')}")
+        else:
+            st.caption("버튼을 누르면 다음 7일 동안 적용할 ‘단 하나의 규칙’이 생성돼요.")
         # --- 원인 주간 분석 (버튼 누르면 바로 생성/갱신) ---
         weekly_reasons = [r for r in fails["fail_reason"].fillna("").tolist() if str(r).strip()]
         if len(weekly_reasons) == 0:
