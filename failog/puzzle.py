@@ -281,7 +281,12 @@ def load_gallery(user_id: str) -> List[Dict[str, str]]:
     c.close()
     return [{"category": str(a), "image_path": str(b), "completed_at": str(ca)} for a, b, ca in rows]
 
-
+def get_render_payload(user_id: str) -> Dict[str, object]:
+    """퍼즐 화면 렌더링에 필요한 상태/보관함 데이터를 한 번에 반환."""
+    return {
+        "state": load_state(user_id),
+        "gallery": load_gallery(user_id),
+    }
 # =========================================================
 # Puzzle operations
 # =========================================================
