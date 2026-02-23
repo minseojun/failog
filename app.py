@@ -10,7 +10,7 @@ from failog.user_id import get_or_create_user_id
 
 from failog.screens_planner import screen_planner
 from failog.screens_failures import screen_failures
-from failog.screens_puzzle import screen_puzzle  # ✅ 추가
+from failog.screens_puzzle import screen_puzzle
 
 from failog.panels import render_openai_bottom_panel, render_privacy_ai_consent_panel
 
@@ -22,7 +22,6 @@ def main():
     init_db()
 
     user_id = get_or_create_user_id()
-
     render_hero()
 
     screen = top_nav()
@@ -30,18 +29,21 @@ def main():
     if screen == "planner":
         screen_planner(user_id)
 
-        # ✅ Planner에서만 보이도록
         with st.expander("🔑 OpenAI 설정", expanded=False):
             render_openai_bottom_panel()
 
         with st.expander("🔒 데이터/AI 안내 및 동의", expanded=False):
             render_privacy_ai_consent_panel()
 
+    elif screen == "failures":
+        screen_failures(user_id)
+
     elif screen == "puzzle":
         screen_puzzle(user_id)
 
     else:
-        screen_failures(user_id)
+        # fallback
+        screen_planner(user_id)
 
 
 if __name__ == "__main__":
