@@ -10,6 +10,7 @@ from failog.user_id import get_or_create_user_id
 
 from failog.screens_planner import screen_planner
 from failog.screens_failures import screen_failures
+from failog.screens_puzzle import screen_puzzle  # ✅ NEW
 
 from failog.panels import render_openai_bottom_panel, render_privacy_ai_consent_panel
 
@@ -25,7 +26,7 @@ def main():
 
     render_hero()
 
-    screen = top_nav()
+    screen = top_nav()  # planner / failures / puzzle
 
     if screen == "planner":
         screen_planner(user_id)
@@ -36,6 +37,9 @@ def main():
 
         with st.expander("🔒 데이터/AI 안내 및 동의", expanded=False):
             render_privacy_ai_consent_panel()
+
+    elif screen == "puzzle":
+        screen_puzzle(user_id)
 
     else:
         screen_failures(user_id)
