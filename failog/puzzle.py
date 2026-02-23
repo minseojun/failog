@@ -258,3 +258,13 @@ def load_gallery(user_id: str) -> List[dict]:
     ).fetchall()
     c.close()
     return [{"category": r[0], "image_file": r[1], "completed_at": r[2]} for r in rows]
+
+def award_piece_if_eligible(user_id: str):
+    """
+    screens_planner에서 쓰던 이름 호환용.
+    내부적으로 try_award_piece를 호출한다.
+
+    Returns:
+      (awarded: bool, msg: str)
+    """
+    return try_award_piece(user_id)
